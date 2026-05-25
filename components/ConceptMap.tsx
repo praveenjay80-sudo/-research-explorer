@@ -4,22 +4,29 @@ import { ConceptGraph, ConceptNode } from '@/types';
 
 interface ConceptMapProps {
   graph: ConceptGraph;
-  height?: number; // kept for API compat, not used
+  height?: number;
+  onSearch?: (query: string) => void;
 }
 
 interface ColumnProps {
   title: string;
   subtitle: string;
   nodes: ConceptNode[];
-  accent: string;        // tailwind bg class for header pill
-  chipClass: string;     // tailwind classes for each chip
+  accent: string;
+  chipClass: string;
   mainNode?: ConceptNode;
+  onSearch?: (query: string) => void;
 }
 
-function Column({ title, subtitle, nodes, accent, chipClass, mainNode }: ColumnProps) {
+function formatWorks(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return String(n);
+}
+
+function Column({ title, subtitle, nodes, accent, chipClass, mainNode, onSearch }: ColumnProps) {
   return (
     <div className="flex flex-col gap-2 min-w-0">
-      {/* Column header */}
       <div className="flex items-center gap-1.5 mb-1">
         <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${accent}`}>
           {title}
@@ -27,42 +34,42 @@ function Column({ title, subtitle, nodes, accent, chipClass, mainNode }: ColumnP
         <span className="text-xs text-slate-400">{subtitle}</span>
       </div>
 
-      {/* Main concept (only in centre column) */}
+      {/* Main concept pill — always clickable */}
       {mainNode && (
-        <span className="inline-block w-full text-center text-sm font-bold text-white bg-blue-600 rounded-lg px-3 py-2 leading-snug mb-1">
+        <button
+          onClick={() => onSearch?.(mainNode.name)}
+          title={`Search "${mainNode.name}"`}
+          className="w-full text-center text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg px-3 py-2 leading-snug mb-1 transition-colors"
+        >
           {mainNode.name}
-        </span>
+        </button>
       )}
 
-      {/* Concept chips */}
       <div className="flex flex-col gap-1.5">
         {nodes.length === 0 && (
           <span className="text-xs text-slate-300 italic">—</span>
         )}
         {nodes.map((node) => (
-          <span
+          <button
             key={node.id}
-            title={node.description ?? node.name}
-            className={`text-xs rounded-lg px-2.5 py-1.5 leading-snug cursor-default select-none transition-colors ${chipClass}`}
+            onClick={() => onSearch?.(node.name)}
+            title={node.description ? `${node.description}\n\nClick to search` : `Search "${node.name}"`}
+            className={`text-left text-xs rounded-lg px-2.5 py-1.5 leading-snug transition-colors ${chipClass} ${
+              onSearch ? 'cursor-pointer hover:ring-1 hover:ring-current hover:ring-opacity-30' : 'cursor-default'
+            }`}
           >
             {node.name}
             {node.worksCount > 0 && (
-              <span className="ml-1.5 opacity-50 text-[10px]">
-                {node.worksCount >= 1_000_000
-                  ? `${(node.worksCount / 1_000_000).toFixed(1)}M`
-                  : node.worksCount >= 1_000
-                  ? `${(node.worksCount / 1_000).toFixed(0)}K`
-                  : node.worksCount}
-              </span>
+              <span className="ml-1.5 opacity-40 text-[10px]">{formatWorks(node.worksCount)}</span>
             )}
-          </span>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-export default function ConceptMap({ graph }: ConceptMapProps) {
+export default function ConceptMap({ graph, onSearch }: ConceptMapProps) {
   if (graph.nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-36 bg-slate-50 rounded-xl border border-slate-200 text-slate-400 text-sm">
@@ -104,6 +111,11 @@ export default function ConceptMap({ graph }: ConceptMapProps) {
       </div>
 
       {/* Three columns */}
+      {onSearch && (
+        <p className="px-4 pt-2 text-xs text-slate-400">
+          Click any keyword to search it
+        </p>
+      )}
       <div className="grid grid-cols-3 divide-x divide-slate-100 p-4 gap-0">
         <div className="pr-4">
           <Column
@@ -112,6 +124,7 @@ export default function ConceptMap({ graph }: ConceptMapProps) {
             nodes={broad}
             accent="bg-blue-100 text-blue-700"
             chipClass="bg-blue-50 text-blue-800 hover:bg-blue-100"
+            onSearch={onSearch}
           />
         </div>
         <div className="px-4">
@@ -122,6 +135,7 @@ export default function ConceptMap({ graph }: ConceptMapProps) {
             mainNode={mainNode}
             accent="bg-slate-100 text-slate-600"
             chipClass="bg-slate-50 text-slate-700 hover:bg-slate-100"
+            onSearch={onSearch}
           />
         </div>
         <div className="pl-4">
@@ -131,6 +145,7 @@ export default function ConceptMap({ graph }: ConceptMapProps) {
             nodes={narrow}
             accent="bg-amber-100 text-amber-700"
             chipClass="bg-amber-50 text-amber-800 hover:bg-amber-100"
+            onSearch={onSearch}
           />
         </div>
       </div>

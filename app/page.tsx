@@ -140,7 +140,7 @@ export default function HomePage() {
                 {loading ? (
                   <div className="bg-slate-100 rounded-xl animate-pulse" style={{ height: 420 }} />
                 ) : (
-                  <ConceptMap graph={conceptGraph} height={420} />
+                  <ConceptMap graph={conceptGraph} height={420} onSearch={handleSearch} />
                 )}
 
                 {/* Level legend detail */}
