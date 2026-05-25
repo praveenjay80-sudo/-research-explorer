@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Paper } from '@/types';
-import type { Reference } from '@/lib/semanticScholar';
+import type { CuratedReference } from '@/lib/ai';
 
 interface PaperCardProps {
   paper: Paper;
@@ -21,7 +21,6 @@ function formatNum(n: number): string {
   return String(n);
 }
 
-// Derive a Semantic Scholar lookup ID from any paper
 function getLookupId(paper: Paper): string | null {
   if (paper.source === 'semantic-scholar' && paper.id.startsWith('s2-')) {
     return paper.id.slice(3);
@@ -30,11 +29,12 @@ function getLookupId(paper: Paper): string | null {
   return null;
 }
 
-function ReferencesPanel({ lookupId }: { lookupId: string }) {
-  const [refs, setRefs] = useState<Reference[] | null>(null);
+function ReferencesPanel({ lookupId, paperTitle }: { lookupId: string; paperTitle: string }) {
+  const [refs, setRefs] = useState<CuratedReference[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [opened, setOpened] = useState(false);
+  const [aiCurated, setAiCurated] = useState(false);
 
   async function load() {
     if (opened) { setOpened(false); return; }
@@ -42,9 +42,12 @@ function ReferencesPanel({ lookupId }: { lookupId: string }) {
     if (refs !== null) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/references?paperId=${encodeURIComponent(lookupId)}`);
+      const res = await fetch(
+        `/api/bibliography?paperId=${encodeURIComponent(lookupId)}&title=${encodeURIComponent(paperTitle)}`
+      );
       const data = await res.json();
       setRefs(data.references ?? []);
+      setAiCurated(data.aiCurated ?? false);
     } catch {
       setError(true);
       setRefs([]);
@@ -74,18 +77,25 @@ function ReferencesPanel({ lookupId }: { lookupId: string }) {
               {error ? 'Could not load references.' : 'No references found for this paper.'}
             </p>
           ) : (
-            <ol className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-              {(refs ?? [])
-                .sort((a, b) => b.citationCount - a.citationCount)
-                .map((ref, i) => (
+            <>
+              {aiCurated && (
+                <div className="flex items-center gap-1 mb-2">
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                    AI Curated
+                  </span>
+                  <span className="text-[10px] text-slate-400">Key references selected by Claude</span>
+                </div>
+              )}
+              <ol className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                {(refs ?? []).map((ref, i) => (
                   <li key={ref.paperId ?? i} className="flex gap-2 text-xs text-slate-600">
-                    <span className="flex-shrink-0 w-5 text-slate-300 text-right">{i + 1}.</span>
+                    <span className="flex-shrink-0 w-5 text-slate-300 text-right font-medium">{i + 1}.</span>
                     <div className="min-w-0">
                       <a
                         href={ref.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="font-medium text-slate-800 hover:text-blue-600 leading-snug line-clamp-2"
+                        className="font-semibold text-slate-800 hover:text-blue-600 leading-snug line-clamp-2"
                       >
                         {ref.title}
                       </a>
@@ -93,7 +103,6 @@ function ReferencesPanel({ lookupId }: { lookupId: string }) {
                         {ref.authors.length > 0 && (
                           <span>
                             {ref.authors.join(', ')}
-                            {ref.authors.length < (ref.authors.length) ? ' et al.' : ''}
                             {ref.year ? ` (${ref.year})` : ''}
                           </span>
                         )}
@@ -106,10 +115,16 @@ function ReferencesPanel({ lookupId }: { lookupId: string }) {
                           </span>
                         )}
                       </div>
+                      {ref.importance && (
+                        <p className="mt-1 text-[11px] text-slate-500 leading-snug italic border-l-2 border-purple-200 pl-2">
+                          {ref.importance}
+                        </p>
+                      )}
                     </div>
                   </li>
                 ))}
-            </ol>
+              </ol>
+            </>
           )}
         </div>
       )}
@@ -191,7 +206,7 @@ export default function PaperCard({ paper, rank }: PaperCardProps) {
           )}
 
           {/* Bibliography */}
-          {lookupId && <ReferencesPanel lookupId={lookupId} />}
+          {lookupId && <ReferencesPanel lookupId={lookupId} paperTitle={paper.title} />}
         </div>
       </div>
     </div>
