@@ -38,10 +38,10 @@ function reconstructAbstract(inv: Record<string, number[]> | undefined): string 
 
 // Find the best-matching OpenAlex concept for a query string
 export async function findBestConcept(query: string): Promise<OAConcept | null> {
+  // Use default relevance sort — NOT works_count which returns broadest concepts
   const params = new URLSearchParams({
     search: query,
-    sort: 'works_count:desc',
-    'per-page': '1',
+    'per-page': '5',
     select: 'id,display_name,level,ancestors,related_concepts,description,works_count',
     mailto: MAILTO,
   });
@@ -50,7 +50,19 @@ export async function findBestConcept(query: string): Promise<OAConcept | null> 
   });
   if (!res.ok) return null;
   const data = await res.json();
-  return data.results?.[0] ?? null;
+  const results: OAConcept[] = data.results ?? [];
+  if (!results.length) return null;
+
+  const qWords = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+
+  // Prefer concept whose name shares words with the query
+  for (const concept of results) {
+    const name = concept.display_name.toLowerCase();
+    if (qWords.some((w) => name.includes(w))) return concept;
+  }
+
+  // If nothing matches by name, don't risk using the wrong concept
+  return null;
 }
 
 function mapWork(work: OAWork): Paper {
@@ -86,17 +98,18 @@ function mapWork(work: OAWork): Paper {
 const WORK_FIELDS =
   'id,title,type,authorships,publication_year,cited_by_count,abstract_inverted_index,doi,open_access,primary_location';
 
-// Search works by concept ID (precise — only papers actually in this field)
+// Search works by concept ID + text query combined (maximum precision)
 async function fetchWorksByConcept(
   conceptId: string,
+  query: string,
   page: number,
   perPage: number
 ): Promise<{ papers: Paper[]; total: number }> {
-  // Fetch papers AND books separately for best coverage
   const shortId = conceptId.replace('https://openalex.org/', '');
 
   const params = new URLSearchParams({
-    filter: `concepts.id:${shortId}`,
+    search: query,                          // relevance match
+    filter: `concepts.id:${shortId}`,      // must be tagged in this field
     sort: 'cited_by_count:desc',
     'per-page': String(perPage),
     page: String(page),
@@ -150,7 +163,7 @@ export async function searchOpenAlex(
   conceptId?: string
 ): Promise<{ papers: Paper[]; total: number }> {
   if (conceptId) {
-    return fetchWorksByConcept(conceptId, page, perPage);
+    return fetchWorksByConcept(conceptId, query, page, perPage);
   }
   return fetchWorksBySearch(query, page, perPage);
 }
