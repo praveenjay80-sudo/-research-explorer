@@ -2,6 +2,14 @@ import { Paper } from '@/types';
 
 const BASE_URL = 'https://api.semanticscholar.org/graph/v1';
 
+function s2Headers(): Record<string, string> {
+  const h: Record<string, string> = { 'User-Agent': 'ResearchExplorer/1.0' };
+  if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
+    h['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
+  }
+  return h;
+}
+
 interface S2Paper {
   paperId: string;
   title: string;
@@ -28,7 +36,7 @@ export async function searchSemanticScholar(
   });
 
   const res = await fetch(`${BASE_URL}/paper/search?${params}`, {
-    headers: { 'User-Agent': 'ResearchExplorer/1.0' },
+    headers: s2Headers(),
     next: { revalidate: 3600 },
   });
 
@@ -56,4 +64,42 @@ export async function searchSemanticScholar(
   }));
 
   return { papers, total: data.total || 0 };
+}
+
+export interface Reference {
+  paperId?: string;
+  title: string;
+  authors: string[];
+  year?: number;
+  citationCount: number;
+  doi?: string;
+  url: string;
+}
+
+export async function fetchReferences(lookupId: string): Promise<Reference[]> {
+  const fields = 'title,authors,year,citationCount,externalIds';
+  const res = await fetch(
+    `${BASE_URL}/paper/${encodeURIComponent(lookupId)}/references?fields=${fields}&limit=100`,
+    { headers: s2Headers() }
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+
+  return ((data.data as Array<{ citedPaper: S2Paper & { paperId: string } }>) || [])
+    .map((item) => {
+      const p = item.citedPaper;
+      if (!p?.title) return null;
+      return {
+        paperId: p.paperId,
+        title: p.title,
+        authors: (p.authors || []).slice(0, 3).map((a) => a.name),
+        year: p.year || undefined,
+        citationCount: p.citationCount || 0,
+        doi: p.externalIds?.DOI,
+        url: p.externalIds?.DOI
+          ? `https://doi.org/${p.externalIds.DOI}`
+          : `https://www.semanticscholar.org/paper/${p.paperId}`,
+      };
+    })
+    .filter(Boolean) as Reference[];
 }
