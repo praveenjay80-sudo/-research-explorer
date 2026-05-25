@@ -10,6 +10,7 @@ export interface Paper {
   fieldsOfStudy?: string[];
   doi?: string;
   concepts?: string[];
+  workType?: string;
 }
 
 export interface ConceptNode {
@@ -19,6 +20,7 @@ export interface ConceptNode {
   score: number;
   worksCount: number;
   description?: string;
+  isMain?: boolean;
   x?: number;
   y?: number;
   fx?: number | null;

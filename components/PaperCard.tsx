@@ -42,9 +42,12 @@ export default function PaperCard({ paper, rank }: PaperCardProps) {
               {paper.title}
             </a>
             <div className="flex-shrink-0 flex items-center gap-1.5">
-              <span
-                className={`text-xs font-semibold px-1.5 py-0.5 rounded ${src.color}`}
-              >
+              {paper.workType === 'book' && (
+                <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                  Book
+                </span>
+              )}
+              <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${src.color}`}>
                 {src.label}
               </span>
             </div>

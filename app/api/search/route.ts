@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchSemanticScholar } from '@/lib/semanticScholar';
-import { searchOpenAlex, fetchConceptGraph } from '@/lib/openAlex';
+import { searchOpenAlex, fetchTopicConceptGraph } from '@/lib/openAlex';
 import { Paper, ConceptGraph } from '@/types';
 
 export async function GET(request: NextRequest) {
@@ -12,15 +12,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Query is required' }, { status: 400 });
   }
 
-  const [s2Result, oaResult] = await Promise.allSettled([
+  const [s2Result, oaResult, conceptResult] = await Promise.allSettled([
     searchSemanticScholar(query, (page - 1) * 50, 50),
     searchOpenAlex(query, page, 50),
+    page === 1 ? fetchTopicConceptGraph(query) : Promise.resolve(null),
   ]);
 
   const s2Papers = s2Result.status === 'fulfilled' ? s2Result.value.papers : [];
   const oaPapers = oaResult.status === 'fulfilled' ? oaResult.value.papers : [];
-  const conceptScores =
-    oaResult.status === 'fulfilled' ? oaResult.value.conceptScores : new Map();
   const totalCount = Math.max(
     s2Result.status === 'fulfilled' ? s2Result.value.total : 0,
     oaResult.status === 'fulfilled' ? oaResult.value.total : 0
@@ -46,20 +45,10 @@ export async function GET(request: NextRequest) {
     (a, b) => b.citationCount - a.citationCount
   );
 
-  // Build concept graph from top-scored concepts
-  const topConceptIds = Array.from(conceptScores.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 25)
-    .map((c) => c.node.id);
-
-  let conceptGraph: ConceptGraph = { nodes: [], links: [] };
-  if (topConceptIds.length > 0) {
-    try {
-      conceptGraph = await fetchConceptGraph(topConceptIds);
-    } catch {
-      // return empty graph on failure
-    }
-  }
+  const conceptGraph: ConceptGraph =
+    conceptResult.status === 'fulfilled' && conceptResult.value
+      ? conceptResult.value
+      : { nodes: [], links: [] };
 
   return NextResponse.json({ papers, totalCount, conceptGraph, page });
 }

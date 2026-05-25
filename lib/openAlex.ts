@@ -6,6 +6,7 @@ const MAILTO = 'praveen.jay80@gmail.com';
 interface OAWork {
   id: string;
   title: string;
+  type?: string;
   authorships: Array<{ author: { display_name: string } }>;
   publication_year: number;
   cited_by_count: number;
@@ -21,9 +22,9 @@ interface OAConcept {
   display_name: string;
   level: number;
   ancestors: Array<{ id: string; display_name: string; level: number }>;
+  related_concepts?: Array<{ id: string; display_name: string; level: number; score: number }>;
   description?: string;
   works_count: number;
-  cited_by_count: number;
 }
 
 function reconstructAbstract(inv: Record<string, number[]> | undefined): string {
@@ -40,17 +41,13 @@ export async function searchOpenAlex(
   query: string,
   page = 1,
   perPage = 50
-): Promise<{
-  papers: Paper[];
-  conceptScores: Map<string, { node: ConceptNode; score: number }>;
-  total: number;
-}> {
+): Promise<{ papers: Paper[]; total: number }> {
   const params = new URLSearchParams({
     search: query,
     sort: 'cited_by_count:desc',
     'per-page': String(perPage),
     page: String(page),
-    select: 'id,title,authorships,publication_year,cited_by_count,concepts,abstract_inverted_index,doi,open_access,primary_location',
+    select: 'id,title,type,authorships,publication_year,cited_by_count,abstract_inverted_index,doi,open_access,primary_location',
     mailto: MAILTO,
   });
 
@@ -60,28 +57,7 @@ export async function searchOpenAlex(
   if (!res.ok) throw new Error(`OpenAlex API error: ${res.status}`);
   const data = await res.json();
 
-  const conceptScores = new Map<string, { node: ConceptNode; score: number }>();
-
   const papers: Paper[] = ((data.results as OAWork[]) || []).map((work) => {
-    const workConceptIds: string[] = [];
-
-    for (const c of work.concepts || []) {
-      workConceptIds.push(c.id);
-      const existing = conceptScores.get(c.id);
-      if (!existing || c.score > existing.score) {
-        conceptScores.set(c.id, {
-          node: {
-            id: c.id,
-            name: c.display_name,
-            level: c.level,
-            score: c.score,
-            worksCount: 0,
-          },
-          score: c.score,
-        });
-      }
-    }
-
     const url =
       work.doi
         ? `https://doi.org/${work.doi}`
@@ -99,65 +75,94 @@ export async function searchOpenAlex(
       url,
       source: 'openalex',
       doi: work.doi,
-      concepts: workConceptIds,
+      workType: work.type,
     };
   });
 
-  return { papers, conceptScores, total: data.meta?.count || 0 };
+  return { papers, total: data.meta?.count || 0 };
 }
 
-export async function fetchConceptGraph(conceptIds: string[]): Promise<ConceptGraph> {
-  if (conceptIds.length === 0) return { nodes: [], links: [] };
-
-  const ids = conceptIds
-    .slice(0, 25)
-    .map((id) => id.replace('https://openalex.org/', ''))
-    .join('|');
-
-  const params = new URLSearchParams({
-    filter: `openalex_id:${ids}`,
-    select: 'id,display_name,level,ancestors,description,works_count',
-    'per-page': '25',
+// Fetch concept graph by searching the query term directly in OpenAlex concepts
+export async function fetchTopicConceptGraph(query: string): Promise<ConceptGraph> {
+  // Step 1: Search for the best matching concept for this query
+  const searchParams = new URLSearchParams({
+    search: query,
+    sort: 'works_count:desc',
+    'per-page': '1',
+    select: 'id,display_name,level,ancestors,related_concepts,description,works_count',
     mailto: MAILTO,
   });
 
-  const res = await fetch(`${BASE_URL}/concepts?${params}`, {
+  const searchRes = await fetch(`${BASE_URL}/concepts?${searchParams}`, {
     next: { revalidate: 3600 },
   });
-  if (!res.ok) return { nodes: [], links: [] };
-  const data = await res.json();
 
+  if (!searchRes.ok) return { nodes: [], links: [] };
+  const searchData = await searchRes.json();
+  if (!searchData.results?.length) return { nodes: [], links: [] };
+
+  const main: OAConcept = searchData.results[0];
   const nodesMap = new Map<string, ConceptNode>();
   const links: ConceptLink[] = [];
   const seenLinks = new Set<string>();
 
-  for (const concept of (data.results as OAConcept[]) || []) {
-    nodesMap.set(concept.id, {
-      id: concept.id,
-      name: concept.display_name,
-      level: concept.level,
-      score: 1,
-      worksCount: concept.works_count || 0,
-      description: concept.description,
+  const addLink = (sourceId: string, targetId: string, type: 'broader' | 'related') => {
+    const key = `${sourceId}→${targetId}`;
+    if (!seenLinks.has(key)) {
+      seenLinks.add(key);
+      links.push({ source: sourceId, target: targetId, type });
+    }
+  };
+
+  // Add the main concept (marked with isMain)
+  nodesMap.set(main.id, {
+    id: main.id,
+    name: main.display_name,
+    level: main.level,
+    score: 1.0,
+    worksCount: main.works_count || 0,
+    description: main.description,
+    isMain: true,
+  });
+
+  // Add ancestors (broader concepts) as parents
+  for (const ancestor of main.ancestors || []) {
+    nodesMap.set(ancestor.id, {
+      id: ancestor.id,
+      name: ancestor.display_name,
+      level: ancestor.level,
+      score: 0.6,
+      worksCount: 0,
     });
+    // Link: ancestor → main (broader flows down to main)
+    addLink(ancestor.id, main.id, 'broader');
+  }
 
-    for (const ancestor of concept.ancestors || []) {
-      if (!nodesMap.has(ancestor.id)) {
-        nodesMap.set(ancestor.id, {
-          id: ancestor.id,
-          name: ancestor.display_name,
-          level: ancestor.level,
-          score: 0.4,
-          worksCount: 0,
-        });
-      }
-
-      const linkKey = `${concept.id}→${ancestor.id}`;
-      if (!seenLinks.has(linkKey)) {
-        seenLinks.add(linkKey);
-        links.push({ source: concept.id, target: ancestor.id, type: 'broader' });
+  // Link ancestors to each other (parent → child in the chain)
+  const ancestors = main.ancestors || [];
+  for (let i = 0; i < ancestors.length; i++) {
+    for (let j = i + 1; j < ancestors.length; j++) {
+      if (ancestors[i].level < ancestors[j].level) {
+        addLink(ancestors[i].id, ancestors[j].id, 'broader');
       }
     }
+  }
+
+  // Add related concepts (narrower / sibling topics)
+  const related = (main.related_concepts || [])
+    .filter((r) => r.score > 0.3)
+    .slice(0, 12);
+
+  for (const rel of related) {
+    nodesMap.set(rel.id, {
+      id: rel.id,
+      name: rel.display_name,
+      level: rel.level,
+      score: rel.score,
+      worksCount: 0,
+    });
+    // Related concepts link from main outward
+    addLink(main.id, rel.id, 'related');
   }
 
   return { nodes: Array.from(nodesMap.values()), links };

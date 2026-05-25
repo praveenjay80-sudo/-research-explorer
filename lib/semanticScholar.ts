@@ -12,6 +12,7 @@ interface S2Paper {
   externalIds?: { DOI?: string; ArXiv?: string };
   fieldsOfStudy?: string[];
   url?: string;
+  publicationTypes?: string[];
 }
 
 export async function searchSemanticScholar(
@@ -21,7 +22,7 @@ export async function searchSemanticScholar(
 ): Promise<{ papers: Paper[]; total: number }> {
   const params = new URLSearchParams({
     query,
-    fields: 'title,authors,year,citationCount,abstract,externalIds,fieldsOfStudy,url',
+    fields: 'title,authors,year,citationCount,abstract,externalIds,fieldsOfStudy,url,publicationTypes',
     limit: String(Math.min(limit, 100)),
     offset: String(offset),
   });
@@ -51,6 +52,7 @@ export async function searchSemanticScholar(
     source: 'semantic-scholar',
     fieldsOfStudy: p.fieldsOfStudy || [],
     doi: p.externalIds?.DOI,
+    workType: p.publicationTypes?.includes('Book') ? 'book' : 'article',
   }));
 
   return { papers, total: data.total || 0 };

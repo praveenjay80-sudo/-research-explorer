@@ -1,27 +1,34 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ConceptGraph, ConceptNode, ConceptLink } from '@/types';
+import { ConceptGraph, ConceptNode } from '@/types';
 
 interface ConceptMapProps {
   graph: ConceptGraph;
   height?: number;
 }
 
-const LEVEL_CONFIG: Record<
-  number,
-  { color: string; radius: number; label: string; textColor: string }
-> = {
-  0: { color: '#3B82F6', radius: 28, label: 'Field', textColor: '#1D4ED8' },
-  1: { color: '#8B5CF6', radius: 22, label: 'Subfield', textColor: '#6D28D9' },
-  2: { color: '#10B981', radius: 16, label: 'Topic', textColor: '#047857' },
-  3: { color: '#F59E0B', radius: 12, label: 'Narrow', textColor: '#B45309' },
-  4: { color: '#F97316', radius: 10, label: 'Narrow', textColor: '#C2410C' },
-  5: { color: '#EF4444', radius: 8, label: 'Narrow', textColor: '#B91C1C' },
+// Level 0 = broadest field (top), higher = narrower
+const LEVEL_STYLE: Record<number, { fill: string; stroke: string; r: number; fontSize: number }> = {
+  0: { fill: '#3B82F6', stroke: '#1D4ED8', r: 32, fontSize: 11 },
+  1: { fill: '#8B5CF6', stroke: '#6D28D9', r: 26, fontSize: 10 },
+  2: { fill: '#10B981', stroke: '#047857', r: 20, fontSize: 10 },
+  3: { fill: '#F59E0B', stroke: '#B45309', r: 15, fontSize: 9 },
+  4: { fill: '#F97316', stroke: '#C2410C', r: 12, fontSize: 9 },
+  5: { fill: '#EF4444', stroke: '#B91C1C', r: 10, fontSize: 8 },
 };
 
-function getLevelConfig(level: number) {
-  return LEVEL_CONFIG[Math.min(level, 5)] ?? LEVEL_CONFIG[5];
+const LEVEL_LABEL: Record<number, string> = {
+  0: 'Field',
+  1: 'Subfield',
+  2: 'Topic',
+  3: 'Narrow topic',
+  4: 'Narrow',
+  5: 'Narrow',
+};
+
+function styleFor(level: number) {
+  return LEVEL_STYLE[Math.min(level, 5)] ?? LEVEL_STYLE[5];
 }
 
 interface SimNode extends ConceptNode {
@@ -33,277 +40,304 @@ interface SimNode extends ConceptNode {
   fy?: number | null;
 }
 
-interface SimLink {
-  source: SimNode;
-  target: SimNode;
-  type: 'broader' | 'related';
-}
-
-export default function ConceptMap({ graph, height = 420 }: ConceptMapProps) {
+export default function ConceptMap({ graph, height = 460 }: ConceptMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [tooltip, setTooltip] = useState<{
-    x: number;
-    y: number;
-    node: ConceptNode;
-  } | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const simulationRef = useRef<{ stop: () => void } | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; node: ConceptNode } | null>(null);
+  const simRef = useRef<{ stop: () => void } | null>(null);
 
-  const runSimulation = useCallback(async () => {
+  const draw = useCallback(async () => {
     if (!svgRef.current || graph.nodes.length === 0) return;
 
     const d3 = await import('d3');
     const svg = d3.select(svgRef.current);
-    const width = svgRef.current.clientWidth || 700;
-    svg.attr('width', width).attr('height', height);
-
+    const W = svgRef.current.clientWidth || 640;
+    const H = height;
+    svg.attr('viewBox', `0 0 ${W} ${H}`);
     svg.selectAll('*').remove();
 
-    const defs = svg.append('defs');
-    defs
+    // Arrow marker
+    svg
+      .append('defs')
       .append('marker')
-      .attr('id', 'arrowhead')
+      .attr('id', 'arrow')
       .attr('viewBox', '0 -4 8 8')
-      .attr('refX', 8)
+      .attr('refX', 10)
       .attr('refY', 0)
-      .attr('markerWidth', 6)
-      .attr('markerHeight', 6)
+      .attr('markerWidth', 5)
+      .attr('markerHeight', 5)
       .attr('orient', 'auto')
       .append('path')
       .attr('d', 'M0,-4L8,0L0,4')
       .attr('fill', '#CBD5E1');
 
-    const g = svg.append('g').attr('class', 'zoom-group');
+    const g = svg.append('g');
 
-    const zoom = d3
-      .zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.3, 4])
-      .on('zoom', (event) => {
-        g.attr('transform', event.transform);
-      });
+    // Zoom & pan
+    svg.call(
+      d3.zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.25, 5])
+        .on('zoom', (e) => g.attr('transform', e.transform))
+    );
 
-    svg.call(zoom);
+    const mainNode = graph.nodes.find((n) => n.isMain);
+    const mainId = mainNode?.id ?? '';
 
-    // Clone nodes for simulation
-    const nodes: SimNode[] = graph.nodes.map((n) => ({
-      ...n,
-      x: width / 2 + (Math.random() - 0.5) * 200,
-      y: height / 2 + (Math.random() - 0.5) * 200,
-    }));
+    // Clone nodes with initial positions spread by level
+    const nodes: SimNode[] = graph.nodes.map((n) => {
+      const angle = Math.random() * 2 * Math.PI;
+      const r = 80 + n.level * 60;
+      return {
+        ...n,
+        x: n.isMain ? W / 2 : W / 2 + Math.cos(angle) * r,
+        y: n.isMain ? H / 2 : H / 2 + Math.sin(angle) * r,
+      };
+    });
 
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-    const links: SimLink[] = (graph.links as ConceptLink[])
+    const links = graph.links
       .map((l) => {
-        const source = nodeById.get(typeof l.source === 'string' ? l.source : (l.source as ConceptNode).id);
-        const target = nodeById.get(typeof l.target === 'string' ? l.target : (l.target as ConceptNode).id);
-        if (!source || !target) return null;
-        return { source, target, type: l.type };
+        const src = nodeById.get(typeof l.source === 'string' ? l.source : (l.source as ConceptNode).id);
+        const tgt = nodeById.get(typeof l.target === 'string' ? l.target : (l.target as ConceptNode).id);
+        if (!src || !tgt) return null;
+        return { source: src, target: tgt, type: l.type };
       })
-      .filter(Boolean) as SimLink[];
+      .filter(Boolean) as { source: SimNode; target: SimNode; type: string }[];
 
-    const simulation = d3
+    const sim = d3
       .forceSimulation(nodes)
       .force(
         'link',
         d3
-          .forceLink<SimNode, SimLink>(links)
+          .forceLink<SimNode, (typeof links)[0]>(links)
           .id((d) => d.id)
           .distance((l) => {
-            const targetLevel = (l.target as SimNode).level;
-            return 60 + targetLevel * 20;
+            const sl = (l.source as SimNode).level;
+            const tl = (l.target as SimNode).level;
+            return 70 + Math.abs(sl - tl) * 30;
           })
-          .strength(0.4)
+          .strength(0.5)
       )
-      .force('charge', d3.forceManyBody().strength(-180))
-      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
+      .force('charge', d3.forceManyBody().strength(-250))
+      .force('center', d3.forceCenter(W / 2, H / 2).strength(0.03))
       .force(
         'collide',
-        d3
-          .forceCollide<SimNode>()
-          .radius((d) => getLevelConfig(d.level).radius + 10)
-          .strength(0.8)
+        d3.forceCollide<SimNode>().radius((d) => styleFor(d.level).r + 18).strength(0.9)
       )
+      // Pull nodes vertically by level: level 0 near top, higher levels near bottom
       .force(
-        'y',
-        d3
-          .forceY<SimNode>()
-          .y((d) => (d.level / 5) * height * 0.6 + height * 0.2)
-          .strength(0.15)
+        'levelY',
+        d3.forceY<SimNode>().y((d) => {
+          if (d.isMain) return H / 2;
+          if (d.level === 0) return H * 0.18;
+          if (d.level === 1) return H * 0.32;
+          return H * 0.62 + (d.level - 2) * 30;
+        }).strength((d) => (d.isMain ? 0 : 0.25))
       );
 
-    simulationRef.current = simulation;
+    simRef.current = sim;
+
+    // Fix the main node at center
+    const mainSim = nodes.find((n) => n.isMain);
+    if (mainSim) { mainSim.fx = W / 2; mainSim.fy = H / 2; }
 
     // Draw links
-    const linkEl = g
+    const linkEls = g
       .append('g')
       .selectAll('line')
       .data(links)
       .join('line')
-      .attr('stroke', '#E2E8F0')
-      .attr('stroke-width', 1.5)
-      .attr('stroke-dasharray', (d) => (d.type === 'related' ? '4,3' : null))
-      .attr('marker-end', 'url(#arrowhead)');
+      .attr('stroke', (d) => d.type === 'related' ? '#C4B5FD' : '#BAE6FD')
+      .attr('stroke-width', (d) => d.type === 'related' ? 1.5 : 2)
+      .attr('stroke-dasharray', (d) => d.type === 'related' ? '5,4' : null)
+      .attr('opacity', 0.7)
+      .attr('marker-end', 'url(#arrow)');
 
-    // Draw nodes
-    const nodeEl = g
+    // Draw node groups
+    const nodeGs = g
       .append('g')
-      .selectAll<SVGGElement, SimNode>('g.node')
+      .selectAll<SVGGElement, SimNode>('g')
       .data(nodes)
       .join('g')
-      .attr('class', 'node')
-      .style('cursor', 'pointer')
+      .style('cursor', 'grab')
       .call(
-        d3
-          .drag<SVGGElement, SimNode>()
+        d3.drag<SVGGElement, SimNode>()
           .on('start', (event, d) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            d.fx = d.x;
-            d.fy = d.y;
+            if (!event.active) sim.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
           })
-          .on('drag', (event, d) => {
-            d.fx = event.x;
-            d.fy = event.y;
-          })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
           .on('end', (event, d) => {
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
+            if (!event.active) sim.alphaTarget(0);
+            if (!d.isMain) { d.fx = null; d.fy = null; }
           })
       );
 
-    nodeEl
+    // Circle
+    nodeGs
       .append('circle')
-      .attr('r', (d) => getLevelConfig(d.level).radius)
-      .attr('fill', (d) => getLevelConfig(d.level).color)
-      .attr('fill-opacity', 0.85)
-      .attr('stroke', '#fff')
-      .attr('stroke-width', 2);
+      .attr('r', (d) => d.isMain ? 36 : styleFor(d.level).r)
+      .attr('fill', (d) => d.isMain ? '#1D4ED8' : styleFor(d.level).fill)
+      .attr('stroke', (d) => d.isMain ? '#1e3a8a' : styleFor(d.level).stroke)
+      .attr('stroke-width', (d) => d.isMain ? 3 : 1.5)
+      .attr('fill-opacity', (d) => d.isMain ? 1 : 0.88);
 
-    // Label for larger nodes
-    nodeEl
-      .filter((d) => d.level <= 2)
-      .append('text')
-      .text((d) => (d.name.length > 16 ? d.name.slice(0, 14) + '…' : d.name))
-      .attr('text-anchor', 'middle')
-      .attr('dy', (d) => getLevelConfig(d.level).radius + 12)
-      .attr('font-size', (d) => (d.level === 0 ? 11 : d.level === 1 ? 10 : 9))
-      .attr('fill', (d) => getLevelConfig(d.level).textColor)
-      .attr('font-weight', (d) => (d.level === 0 ? '700' : '500'))
-      .style('pointer-events', 'none');
+    // Label inside or below node
+    nodeGs.each(function (d) {
+      const g = d3.select(this);
+      const style = styleFor(d.level);
+      const r = d.isMain ? 36 : style.r;
+      const maxChars = Math.floor(r * 2.2 / (d.isMain ? 7 : 6));
+      const label = d.name.length > maxChars ? d.name.slice(0, maxChars - 1) + '…' : d.name;
+      const words = label.split(' ');
 
-    // Tooltip & selection
-    nodeEl
+      if (d.isMain || r >= 20) {
+        // Label inside circle (multi-line)
+        const lineH = d.isMain ? 13 : 11;
+        const lines: string[] = [];
+        let cur = '';
+        for (const w of words) {
+          const test = cur ? `${cur} ${w}` : w;
+          if (test.length > maxChars && cur) { lines.push(cur); cur = w; }
+          else cur = test;
+        }
+        if (cur) lines.push(cur);
+        const startY = -((lines.length - 1) * lineH) / 2;
+        lines.forEach((line, i) => {
+          g.append('text')
+            .text(line)
+            .attr('text-anchor', 'middle')
+            .attr('y', startY + i * lineH)
+            .attr('dy', '0.35em')
+            .attr('font-size', d.isMain ? 12 : style.fontSize)
+            .attr('font-weight', d.isMain ? '700' : '500')
+            .attr('fill', '#fff')
+            .style('pointer-events', 'none');
+        });
+      } else {
+        // Label below small node
+        g.append('text')
+          .text(label)
+          .attr('text-anchor', 'middle')
+          .attr('y', r + 11)
+          .attr('font-size', style.fontSize)
+          .attr('font-weight', '500')
+          .attr('fill', styleFor(d.level).stroke)
+          .style('pointer-events', 'none');
+      }
+    });
+
+    // Tooltip hover
+    nodeGs
       .on('mouseenter', (event, d) => {
         const rect = svgRef.current!.getBoundingClientRect();
         setTooltip({ x: event.clientX - rect.left, y: event.clientY - rect.top, node: d });
-        d3.select(event.currentTarget as SVGGElement)
-          .select('circle')
-          .attr('stroke', '#1D4ED8')
-          .attr('stroke-width', 3);
       })
-      .on('mouseleave', (event) => {
-        setTooltip(null);
-        d3.select(event.currentTarget as SVGGElement)
-          .select('circle')
-          .attr('stroke', '#fff')
-          .attr('stroke-width', 2);
-      })
-      .on('click', (_, d) => {
-        setSelectedId((prev) => (prev === d.id ? null : d.id));
-      });
+      .on('mouseleave', () => setTooltip(null));
 
-    simulation.on('tick', () => {
-      linkEl
+    sim.on('tick', () => {
+      linkEls
         .attr('x1', (d) => (d.source as SimNode).x)
         .attr('y1', (d) => (d.source as SimNode).y)
-        .attr('x2', (d) => (d.target as SimNode).x)
-        .attr('y2', (d) => (d.target as SimNode).y);
+        .attr('x2', (d) => {
+          const s = d.source as SimNode;
+          const t = d.target as SimNode;
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const r = styleFor(t.level).r + 4;
+          return t.x - (dx / dist) * r;
+        })
+        .attr('y2', (d) => {
+          const s = d.source as SimNode;
+          const t = d.target as SimNode;
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const r = styleFor(t.level).r + 4;
+          return t.y - (dy / dist) * r;
+        });
 
-      nodeEl.attr('transform', (d) => `translate(${d.x},${d.y})`);
+      nodeGs.attr('transform', (d) => `translate(${d.x},${d.y})`);
     });
 
-    return () => simulation.stop();
+    return () => sim.stop();
   }, [graph, height]);
 
   useEffect(() => {
-    const cleanup = runSimulation();
+    const cleanup = draw();
     return () => {
       cleanup.then((fn) => fn?.());
-      simulationRef.current?.stop();
+      simRef.current?.stop();
     };
-  }, [runSimulation]);
+  }, [draw]);
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-48 text-slate-400 text-sm bg-slate-50 rounded-xl border border-slate-200">
-        Concept map will appear after searching
+      <div
+        className="flex flex-col items-center justify-center bg-slate-50 rounded-xl border border-slate-200 text-slate-400 text-sm gap-2"
+        style={{ height }}
+      >
+        <svg className="w-10 h-10 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        Concept map appears after search
       </div>
     );
   }
 
+  const mainNode = graph.nodes.find((n) => n.isMain);
+
   return (
-    <div className="relative bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
-      <div className="absolute top-3 left-3 z-10 flex flex-wrap gap-1.5">
-        {Object.entries(LEVEL_CONFIG)
-          .slice(0, 4)
-          .map(([level, cfg]) => (
-            <span
-              key={level}
-              className="inline-flex items-center gap-1 text-xs bg-white border border-slate-200 rounded-full px-2 py-0.5 shadow-sm"
-            >
+    <div className="relative bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100 bg-slate-50">
+        <span className="text-xs font-semibold text-slate-600">
+          {mainNode ? `"${mainNode.name}"` : 'Concept Map'}
+        </span>
+        <div className="flex gap-2">
+          {[0, 1, 2, 3].map((lvl) => (
+            <span key={lvl} className="flex items-center gap-1 text-xs text-slate-500">
               <span
                 className="w-2.5 h-2.5 rounded-full inline-block"
-                style={{ backgroundColor: cfg.color }}
+                style={{ backgroundColor: LEVEL_STYLE[lvl].fill }}
               />
-              {cfg.label}
+              {LEVEL_LABEL[lvl]}
             </span>
           ))}
-        <span className="text-xs text-slate-400 bg-white border border-slate-200 rounded-full px-2 py-0.5 shadow-sm">
-          Scroll to zoom · Drag nodes
-        </span>
+        </div>
       </div>
 
-      <div ref={containerRef} style={{ height }}>
-        <svg ref={svgRef} className="w-full" style={{ height }} />
-      </div>
+      <svg ref={svgRef} className="w-full" style={{ height }} />
 
       {tooltip && (
         <div
-          className="absolute z-20 pointer-events-none bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-w-xs"
+          className="absolute z-20 pointer-events-none bg-white border border-slate-200 rounded-lg shadow-xl p-3 w-56"
           style={{
-            left: Math.min(tooltip.x + 12, (svgRef.current?.clientWidth ?? 700) - 220),
-            top: Math.max(tooltip.y - 10, 8),
+            left: Math.min(tooltip.x + 14, (svgRef.current?.clientWidth ?? 600) - 230),
+            top: Math.max(tooltip.y - 8, 8),
           }}
         >
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1.5">
             <span
               className="w-3 h-3 rounded-full flex-shrink-0"
-              style={{ backgroundColor: getLevelConfig(tooltip.node.level).color }}
+              style={{ backgroundColor: tooltip.node.isMain ? '#1D4ED8' : styleFor(tooltip.node.level).fill }}
             />
-            <span className="font-semibold text-slate-800 text-sm">{tooltip.node.name}</span>
+            <span className="font-semibold text-slate-800 text-sm leading-tight">{tooltip.node.name}</span>
           </div>
           <div className="text-xs text-slate-500 space-y-0.5">
-            <div>{getLevelConfig(tooltip.node.level).label} (level {tooltip.node.level})</div>
+            <p>{tooltip.node.isMain ? 'Search topic' : LEVEL_LABEL[Math.min(tooltip.node.level, 5)]}</p>
             {tooltip.node.worksCount > 0 && (
-              <div>{tooltip.node.worksCount.toLocaleString()} works</div>
+              <p>{tooltip.node.worksCount.toLocaleString()} works in OpenAlex</p>
             )}
             {tooltip.node.description && (
-              <div className="mt-1 text-slate-600 line-clamp-3">{tooltip.node.description}</div>
+              <p className="mt-1.5 text-slate-600 leading-snug line-clamp-3">{tooltip.node.description}</p>
             )}
           </div>
         </div>
       )}
 
-      {selectedId && (
-        <div className="absolute bottom-3 left-3 z-10 bg-white border border-blue-200 rounded-lg px-3 py-1.5 text-xs text-blue-700 shadow-sm">
-          Selected: <strong>{graph.nodes.find((n) => n.id === selectedId)?.name}</strong>
-          <button onClick={() => setSelectedId(null)} className="ml-2 text-slate-400 hover:text-slate-600">
-            ✕
-          </button>
-        </div>
-      )}
+      <div className="absolute bottom-2 right-3 text-xs text-slate-300 select-none">
+        Scroll to zoom · Drag to pan
+      </div>
     </div>
   );
 }
