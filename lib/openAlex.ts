@@ -10,7 +10,6 @@ interface OAWork {
   authorships: Array<{ author: { display_name: string } }>;
   publication_year: number;
   cited_by_count: number;
-  concepts: Array<{ id: string; display_name: string; level: number; score: number }>;
   abstract_inverted_index?: Record<string, number[]>;
   doi?: string;
   open_access?: { oa_url?: string };
@@ -37,17 +36,71 @@ function reconstructAbstract(inv: Record<string, number[]> | undefined): string 
   return words.map(([w]) => w).join(' ');
 }
 
-export async function searchOpenAlex(
-  query: string,
-  page = 1,
-  perPage = 50
-): Promise<{ papers: Paper[]; total: number }> {
+// Find the best-matching OpenAlex concept for a query string
+export async function findBestConcept(query: string): Promise<OAConcept | null> {
   const params = new URLSearchParams({
     search: query,
+    sort: 'works_count:desc',
+    'per-page': '1',
+    select: 'id,display_name,level,ancestors,related_concepts,description,works_count',
+    mailto: MAILTO,
+  });
+  const res = await fetch(`${BASE_URL}/concepts?${params}`, {
+    next: { revalidate: 3600 },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.results?.[0] ?? null;
+}
+
+function mapWork(work: OAWork): Paper {
+  const url =
+    work.doi
+      ? `https://doi.org/${work.doi}`
+      : work.open_access?.oa_url ||
+        work.primary_location?.landing_page_url ||
+        work.id;
+
+  const type = work.type ?? 'article';
+  const workType =
+    type === 'book' || type === 'edited-book' || type === 'reference-book'
+      ? 'book'
+      : type === 'book-chapter'
+      ? 'book-chapter'
+      : 'article';
+
+  return {
+    id: work.id,
+    title: work.title || 'Untitled',
+    authors: (work.authorships || []).slice(0, 6).map((a) => a.author.display_name),
+    year: work.publication_year || null,
+    citationCount: work.cited_by_count || 0,
+    abstract: reconstructAbstract(work.abstract_inverted_index),
+    url,
+    source: 'openalex',
+    doi: work.doi,
+    workType,
+  };
+}
+
+const WORK_FIELDS =
+  'id,title,type,authorships,publication_year,cited_by_count,abstract_inverted_index,doi,open_access,primary_location';
+
+// Search works by concept ID (precise — only papers actually in this field)
+async function fetchWorksByConcept(
+  conceptId: string,
+  page: number,
+  perPage: number
+): Promise<{ papers: Paper[]; total: number }> {
+  // Fetch papers AND books separately for best coverage
+  const shortId = conceptId.replace('https://openalex.org/', '');
+
+  const params = new URLSearchParams({
+    filter: `concepts.id:${shortId}`,
     sort: 'cited_by_count:desc',
     'per-page': String(perPage),
     page: String(page),
-    select: 'id,title,type,authorships,publication_year,cited_by_count,abstract_inverted_index,doi,open_access,primary_location',
+    select: WORK_FIELDS,
     mailto: MAILTO,
   });
 
@@ -57,64 +110,71 @@ export async function searchOpenAlex(
   if (!res.ok) throw new Error(`OpenAlex API error: ${res.status}`);
   const data = await res.json();
 
-  const papers: Paper[] = ((data.results as OAWork[]) || []).map((work) => {
-    const url =
-      work.doi
-        ? `https://doi.org/${work.doi}`
-        : work.open_access?.oa_url ||
-          work.primary_location?.landing_page_url ||
-          work.id;
-
-    return {
-      id: work.id,
-      title: work.title || 'Untitled',
-      authors: (work.authorships || []).slice(0, 6).map((a) => a.author.display_name),
-      year: work.publication_year || null,
-      citationCount: work.cited_by_count || 0,
-      abstract: reconstructAbstract(work.abstract_inverted_index),
-      url,
-      source: 'openalex',
-      doi: work.doi,
-      workType: work.type,
-    };
-  });
-
-  return { papers, total: data.meta?.count || 0 };
+  return {
+    papers: ((data.results as OAWork[]) || []).map(mapWork),
+    total: data.meta?.count || 0,
+  };
 }
 
-// Fetch concept graph by searching the query term directly in OpenAlex concepts
-export async function fetchTopicConceptGraph(query: string): Promise<ConceptGraph> {
-  // Step 1: Search for the best matching concept for this query
-  const searchParams = new URLSearchParams({
+// Fallback: text search (used when no concept ID found)
+async function fetchWorksBySearch(
+  query: string,
+  page: number,
+  perPage: number
+): Promise<{ papers: Paper[]; total: number }> {
+  const params = new URLSearchParams({
     search: query,
-    sort: 'works_count:desc',
-    'per-page': '1',
-    select: 'id,display_name,level,ancestors,related_concepts,description,works_count',
+    sort: 'cited_by_count:desc',
+    'per-page': String(perPage),
+    page: String(page),
+    select: WORK_FIELDS,
     mailto: MAILTO,
   });
 
-  const searchRes = await fetch(`${BASE_URL}/concepts?${searchParams}`, {
+  const res = await fetch(`${BASE_URL}/works?${params}`, {
     next: { revalidate: 3600 },
   });
+  if (!res.ok) throw new Error(`OpenAlex API error: ${res.status}`);
+  const data = await res.json();
 
-  if (!searchRes.ok) return { nodes: [], links: [] };
-  const searchData = await searchRes.json();
-  if (!searchData.results?.length) return { nodes: [], links: [] };
+  return {
+    papers: ((data.results as OAWork[]) || []).map(mapWork),
+    total: data.meta?.count || 0,
+  };
+}
 
-  const main: OAConcept = searchData.results[0];
+export async function searchOpenAlex(
+  query: string,
+  page = 1,
+  perPage = 100,
+  conceptId?: string
+): Promise<{ papers: Paper[]; total: number }> {
+  if (conceptId) {
+    return fetchWorksByConcept(conceptId, page, perPage);
+  }
+  return fetchWorksBySearch(query, page, perPage);
+}
+
+// Build concept graph centered on the query topic
+export async function fetchTopicConceptGraph(
+  query: string,
+  concept?: OAConcept | null
+): Promise<ConceptGraph> {
+  const main = concept ?? (await findBestConcept(query));
+  if (!main) return { nodes: [], links: [] };
+
   const nodesMap = new Map<string, ConceptNode>();
   const links: ConceptLink[] = [];
   const seenLinks = new Set<string>();
 
-  const addLink = (sourceId: string, targetId: string, type: 'broader' | 'related') => {
-    const key = `${sourceId}→${targetId}`;
+  const addLink = (src: string, tgt: string, type: 'broader' | 'related') => {
+    const key = `${src}→${tgt}`;
     if (!seenLinks.has(key)) {
       seenLinks.add(key);
-      links.push({ source: sourceId, target: targetId, type });
+      links.push({ source: src, target: tgt, type });
     }
   };
 
-  // Add the main concept (marked with isMain)
   nodesMap.set(main.id, {
     id: main.id,
     name: main.display_name,
@@ -125,7 +185,7 @@ export async function fetchTopicConceptGraph(query: string): Promise<ConceptGrap
     isMain: true,
   });
 
-  // Add ancestors (broader concepts) as parents
+  // Ancestors (broader fields/subfields)
   for (const ancestor of main.ancestors || []) {
     nodesMap.set(ancestor.id, {
       id: ancestor.id,
@@ -134,11 +194,10 @@ export async function fetchTopicConceptGraph(query: string): Promise<ConceptGrap
       score: 0.6,
       worksCount: 0,
     });
-    // Link: ancestor → main (broader flows down to main)
     addLink(ancestor.id, main.id, 'broader');
   }
 
-  // Link ancestors to each other (parent → child in the chain)
+  // Link ancestors to each other by level
   const ancestors = main.ancestors || [];
   for (let i = 0; i < ancestors.length; i++) {
     for (let j = i + 1; j < ancestors.length; j++) {
@@ -148,10 +207,10 @@ export async function fetchTopicConceptGraph(query: string): Promise<ConceptGrap
     }
   }
 
-  // Add related concepts (narrower / sibling topics)
+  // Related/narrower concepts
   const related = (main.related_concepts || [])
-    .filter((r) => r.score > 0.3)
-    .slice(0, 12);
+    .filter((r) => r.score > 0.25)
+    .slice(0, 14);
 
   for (const rel of related) {
     nodesMap.set(rel.id, {
@@ -161,7 +220,6 @@ export async function fetchTopicConceptGraph(query: string): Promise<ConceptGrap
       score: rel.score,
       worksCount: 0,
     });
-    // Related concepts link from main outward
     addLink(main.id, rel.id, 'related');
   }
 

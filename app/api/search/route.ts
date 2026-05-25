@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchSemanticScholar } from '@/lib/semanticScholar';
-import { searchOpenAlex, fetchTopicConceptGraph } from '@/lib/openAlex';
+import { searchOpenAlex, findBestConcept, fetchTopicConceptGraph } from '@/lib/openAlex';
 import { Paper, ConceptGraph } from '@/types';
 
 export async function GET(request: NextRequest) {
@@ -12,10 +12,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Query is required' }, { status: 400 });
   }
 
-  const [s2Result, oaResult, conceptResult] = await Promise.allSettled([
+  // On page 1: look up concept first (used for both concept map + precise search)
+  // On subsequent pages: concept ID passed in query param
+  const conceptIdParam = searchParams.get('conceptId') ?? undefined;
+
+  let conceptId = conceptIdParam;
+  let conceptGraph: ConceptGraph = { nodes: [], links: [] };
+
+  if (page === 1) {
+    const concept = await findBestConcept(query).catch(() => null);
+    conceptId = concept?.id ?? undefined;
+    if (concept) {
+      conceptGraph = await fetchTopicConceptGraph(query, concept).catch(() => ({ nodes: [], links: [] }));
+    }
+  }
+
+  // Fetch papers from both sources concurrently
+  const [s2Result, oaResult] = await Promise.allSettled([
     searchSemanticScholar(query, (page - 1) * 50, 50),
-    searchOpenAlex(query, page, 50),
-    page === 1 ? fetchTopicConceptGraph(query) : Promise.resolve(null),
+    searchOpenAlex(query, page, 100, conceptId),
   ]);
 
   const s2Papers = s2Result.status === 'fulfilled' ? s2Result.value.papers : [];
@@ -25,7 +40,7 @@ export async function GET(request: NextRequest) {
     oaResult.status === 'fulfilled' ? oaResult.value.total : 0
   );
 
-  // Merge and deduplicate by DOI, keeping highest citation count
+  // Deduplicate by DOI, keep highest citation count
   const paperMap = new Map<string, Paper>();
   for (const paper of [...oaPapers, ...s2Papers]) {
     const key = paper.doi ? `doi:${paper.doi.toLowerCase()}` : paper.id;
@@ -45,10 +60,5 @@ export async function GET(request: NextRequest) {
     (a, b) => b.citationCount - a.citationCount
   );
 
-  const conceptGraph: ConceptGraph =
-    conceptResult.status === 'fulfilled' && conceptResult.value
-      ? conceptResult.value
-      : { nodes: [], links: [] };
-
-  return NextResponse.json({ papers, totalCount, conceptGraph, page });
+  return NextResponse.json({ papers, totalCount, conceptGraph, page, conceptId: conceptId ?? null });
 }

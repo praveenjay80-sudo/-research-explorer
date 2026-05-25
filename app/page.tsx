@@ -25,6 +25,7 @@ export default function HomePage() {
   const [hasSearched, setHasSearched] = useState(false);
   const [page, setPage] = useState(1);
   const [activeQuery, setActiveQuery] = useState('');
+  const [conceptId, setConceptId] = useState<string | null>(null);
 
   const search = useCallback(async (q: string, pageNum = 1) => {
     const isNewSearch = pageNum === 1;
@@ -39,15 +40,19 @@ export default function HomePage() {
     }
 
     try {
+      const cid = isNewSearch ? '' : (conceptId ? `&conceptId=${encodeURIComponent(conceptId)}` : '');
       const res = await fetch(
-        `/api/search?query=${encodeURIComponent(q)}&page=${pageNum}`
+        `/api/search?query=${encodeURIComponent(q)}&page=${pageNum}${cid}`
       );
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
 
       setPapers((prev) => (isNewSearch ? data.papers : [...prev, ...data.papers]));
       setTotalCount(data.totalCount);
-      if (isNewSearch) setConceptGraph(data.conceptGraph);
+      if (isNewSearch) {
+        setConceptGraph(data.conceptGraph);
+        setConceptId(data.conceptId ?? null);
+      }
       setPage(pageNum);
       setActiveQuery(q);
       setHasSearched(true);
