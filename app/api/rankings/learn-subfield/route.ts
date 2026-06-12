@@ -21,7 +21,7 @@ function reconstructAbstract(inv: Record<string, number[]> | null | undefined): 
   for (const [word, positions] of Object.entries(inv)) {
     for (const pos of positions) pairs.push([pos, word]);
   }
-  return pairs.sort((a, b) => a[0] - b[0]).map(([, w]) => w).join(' ').slice(0, 600);
+  return pairs.sort((a, b) => a[0] - b[0]).map(([, w]) => w).join(' ').slice(0, 400);
 }
 
 async function fetchTopicWorks(subfield: string): Promise<OAWork[]> {
@@ -31,10 +31,9 @@ async function fetchTopicWorks(subfield: string): Promise<OAWork[]> {
     if (!topicRes.ok) return [];
     const topics = ((await topicRes.json()).results ?? []) as Array<{ id: string }>;
     if (!topics.length) return [];
-
     const topicId = topics[0].id.replace('https://openalex.org/', '');
     const wp = new URLSearchParams({
-      'per-page': '20', sort: 'cited_by_count:desc', mailto: MAILTO,
+      'per-page': '15', sort: 'cited_by_count:desc', mailto: MAILTO,
       select: 'id,title,publication_year,cited_by_count,doi,primary_location,abstract_inverted_index,authorships',
     });
     const worksRes = await fetch(`${OA_BASE}/works?filter=topics.id:${topicId}&${wp}`, { next: { revalidate: 86400 } });
@@ -47,12 +46,11 @@ async function fetchAuthorTopWorks(name: string): Promise<OAWork[]> {
     const ap = new URLSearchParams({ search: name, 'per-page': '3', select: 'id,display_name,cited_by_count', mailto: MAILTO });
     const aRes = await fetch(`${OA_BASE}/authors?${ap}`, { next: { revalidate: 86400 } });
     if (!aRes.ok) return [];
-    const candidates = ((await aRes.json()).results ?? []) as Array<{ id: string; display_name: string }>;
+    const candidates = ((await aRes.json()).results ?? []) as Array<{ id: string }>;
     if (!candidates.length) return [];
-
     const shortId = candidates[0].id.replace('https://openalex.org/', '');
     const wp = new URLSearchParams({
-      'per-page': '5', sort: 'cited_by_count:desc', mailto: MAILTO,
+      'per-page': '3', sort: 'cited_by_count:desc', mailto: MAILTO,
       select: 'id,title,publication_year,cited_by_count,doi,primary_location,abstract_inverted_index,authorships',
     });
     const wRes = await fetch(`${OA_BASE}/works?filter=authorships.author.id:${shortId}&${wp}`, { next: { revalidate: 86400 } });
@@ -70,13 +68,11 @@ export async function POST(req: NextRequest) {
     topScientists: Array<{ name: string; institution: string; citations: number }>;
   };
 
-  // Fetch topic papers + top scientist papers in parallel
   const [topicWorks, ...scientistWorkArrays] = await Promise.all([
     fetchTopicWorks(subfield),
-    ...topScientists.slice(0, 6).map((s) => fetchAuthorTopWorks(s.name)),
+    ...topScientists.slice(0, 5).map((s) => fetchAuthorTopWorks(s.name)),
   ]);
 
-  // Merge, deduplicate by title, sort by citations
   const seen = new Set<string>();
   const allWorks: OAWork[] = [];
   for (const w of [...topicWorks, ...scientistWorkArrays.flat()]) {
@@ -84,7 +80,7 @@ export async function POST(req: NextRequest) {
     if (key && !seen.has(key)) { seen.add(key); allWorks.push(w); }
   }
   allWorks.sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
-  const papers = allWorks.slice(0, 30);
+  const papers = allWorks.slice(0, 20);
 
   const papersBlock = papers.map((w, i) => {
     const abstract = reconstructAbstract(w.abstract_inverted_index);
@@ -97,74 +93,42 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean).join('\n');
   }).join('\n\n');
 
-  const scientistList = topScientists.slice(0, 12)
-    .map((s) => `- ${s.name} (${s.institution}) — ${s.citations.toLocaleString()} citations`)
-    .join('\n');
+  const prompt = `You are explaining "${subfield}" (part of ${field}) to a curious, intelligent person who has never read an academic paper.
 
-  const prompt = `You are building a self-directed learning experience for an intelligent person with no academic background who wants to genuinely understand "${subfield}" (part of the broader field: ${field}).
-
-## World's most-cited researchers in this subfield
-${scientistList}
-
-## Most-cited papers in this subfield (with abstracts where available)
+Available papers from the world's most-cited researchers in this subfield:
 ${papersBlock || 'No papers retrieved — draw on your knowledge of this field.'}
 
----
+Write two things only:
 
-Design a rich, natural curriculum. Do not impose arbitrary limits on how many concepts or papers to include — include everything that genuinely matters for a complete picture of this field, from first principles to the frontier. Be generous. A curious person deserves the real picture.
+PART 1 — OVERVIEW
+Write 1–2 paragraphs in plain English explaining what ${subfield} is, what questions it tries to answer, and why it matters to ordinary people. Explain every technical term the moment you use it. No jargon without explanation. Make it vivid and concrete.
 
-Write the following sections in order:
+PART 2 — READING LIST
+List the papers from above that a newcomer should read, ordered so each one builds naturally on what came before. For any essential classic not in the list above, include it and mark it [Classic].
 
-**Why this field matters**
-The most visceral, compelling reason a non-scientist should care. Connect it to lives, technologies, or mysteries that touch ordinary people. Not generic — be specific to ${subfield}.
+For each paper use exactly this format:
+[number]. "Title" — Authors (Year) · [cited_count] citations
+→ [One sentence: what this paper established or proved]
+→ Builds on: [paper number(s) it requires, or "no prior reading needed"]
 
-**The intellectual landscape**
-What are the big questions this field is trying to answer? What would success look like — what would we be able to do or know? What makes these questions hard?
-
-**Core concepts you need in your head first**
-For each concept that a beginner genuinely needs before they can follow the literature: give it a name, explain it in one plain sentence, then give a concrete everyday analogy. Cover as many concepts as needed — skip nothing essential, include nothing unnecessary.
-
-**Your reading path**
-For every paper from the list above that belongs in a complete curriculum, and any essential classics not on the list (mark these "[Classic]"):
-
-Title, Authors, Year — Cited X times
-Difficulty: Beginner / Intermediate / Advanced
-Read after: [paper number or "Start here"]
-Why read this: [one sentence on what question it answers]
-What you'll understand after: [one sentence on the insight]
-[One sentence on why this paper specifically became so influential]
-
-Order from most accessible to most technical. Group loosely by theme where natural.
-
-**The open frontiers**
-The biggest unsolved problems and active debates in ${subfield} right now. For each: what is the problem, why has it resisted solution, and what would cracking it change?
-
-**The hidden connections**
-Which other fields does ${subfield} draw from most heavily, and which fields has it most transformed? Include surprising connections that a newcomer wouldn't expect.
-
-**If you want to go deeper**
-Suggest 2–3 specific directions a genuinely curious person could take after finishing the reading path above — conferences, journals, online courses, or research groups that are at the frontier.
-
----
+Include all papers that genuinely belong in a complete introduction to this field. Skip papers that are too narrow, too advanced, or redundant.
 
 Rules:
-- Write as if explaining to a brilliant, curious 20-year-old who has never read an academic paper
-- Every technical term must be explained the moment it first appears, in parentheses
-- Never use: "groundbreaking", "pioneering", "revolutionary", "seminal", "landmark"
-- Show impact through numbers and concrete outcomes, not adjectives
-- Be honest about what is not yet understood — mystery is interesting`;
+- Plain English throughout. No "groundbreaking" or "seminal".
+- Every technical term explained in parentheses on first use.
+- Be complete — do not cut off the list.`;
 
   try {
     const client = new Anthropic({ apiKey });
     const msg = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 3000,
       messages: [{ role: 'user', content: prompt }],
     });
     const text = msg.content[0].type === 'text' ? msg.content[0].text.trim() : '';
 
     return NextResponse.json({
-      curriculum: text,
+      text,
       papers: papers.map((w) => ({
         title: w.title,
         year: w.publication_year,

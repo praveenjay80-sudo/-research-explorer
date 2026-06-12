@@ -256,41 +256,27 @@ function renderSections(text: string) {
 }
 
 // ── Subfield curriculum ───────────────────────────────────────────────────
-const CURRICULUM_COLORS: Record<string, { heading: string; bg: string; border: string }> = {
-  'Why this field matters':                    { heading: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
-  'The intellectual landscape':                { heading: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
-  'Core concepts you need in your head first': { heading: 'text-purple-700',  bg: 'bg-purple-50',  border: 'border-purple-200' },
-  'Your reading path':                         { heading: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200' },
-  'The open frontiers':                        { heading: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  'The hidden connections':                    { heading: 'text-teal-700',    bg: 'bg-teal-50',    border: 'border-teal-200' },
-  'If you want to go deeper':                  { heading: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
-};
+const _curriculumCache = new Map<string, string>();
 
 function renderCurriculum(text: string) {
-  const parts = text.split(/\*\*([^*]+)\*\*/g);
-  const sections: Array<{ heading: string; body: string }> = [];
-  for (let i = 1; i < parts.length; i += 2) {
-    sections.push({ heading: parts[i].trim(), body: (parts[i + 1] ?? '').trim() });
+  // Split on PART 1 / PART 2 markers, render overview as prose and reading list as preformatted
+  const part2Match = text.match(/PART\s*2\s*[—–-]?\s*READING LIST/i);
+  if (part2Match && part2Match.index !== undefined) {
+    const overview = text.slice(0, part2Match.index).replace(/PART\s*1\s*[—–-]?\s*OVERVIEW/i, '').trim();
+    const readingList = text.slice(part2Match.index + part2Match[0].length).trim();
+    return (
+      <div className="space-y-4">
+        <div className="text-sm text-slate-700 leading-relaxed">{overview}</div>
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-widest text-blue-700 mb-3">Reading list — in order</h4>
+          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap font-mono bg-slate-50 rounded-xl p-4 border border-slate-200">{readingList}</div>
+        </div>
+      </div>
+    );
   }
-  if (sections.length === 0) {
-    return <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{text}</p>;
-  }
-  return (
-    <div className="space-y-3">
-      {sections.map(({ heading, body }) => {
-        const c = CURRICULUM_COLORS[heading] ?? { heading: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200' };
-        return (
-          <div key={heading} className={`rounded-xl border p-4 ${c.bg} ${c.border}`}>
-            <h4 className={`text-[11px] font-bold uppercase tracking-widest mb-2.5 ${c.heading}`}>{heading}</h4>
-            <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{body}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
+  // Fallback: plain text
+  return <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{text}</p>;
 }
-
-const _curriculumCache = new Map<string, string>();
 
 function SubfieldCurriculum({ field, subfield, topScientists }: {
   field: string;
@@ -299,13 +285,13 @@ function SubfieldCurriculum({ field, subfield, topScientists }: {
 }) {
   const cacheKey = `${field}::${subfield}`;
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const [curriculum, setCurriculum] = useState('');
+  const [text, setText] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     const cached = _curriculumCache.get(cacheKey);
-    if (cached) { setCurriculum(cached); setStatus('done'); }
-    else { setStatus('idle'); setCurriculum(''); }
+    if (cached) { setText(cached); setStatus('done'); }
+    else { setStatus('idle'); setText(''); }
   }, [cacheKey]);
 
   async function generate() {
@@ -317,9 +303,9 @@ function SubfieldCurriculum({ field, subfield, topScientists }: {
         body: JSON.stringify({ field, subfield, topScientists }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json() as { curriculum: string };
-      _curriculumCache.set(cacheKey, json.curriculum);
-      setCurriculum(json.curriculum);
+      const json = await res.json() as { text: string };
+      _curriculumCache.set(cacheKey, json.text);
+      setText(json.text);
       setStatus('done');
     } catch (e) {
       setError(String(e));
@@ -334,7 +320,7 @@ function SubfieldCurriculum({ field, subfield, topScientists }: {
         <span className="text-xl">📚</span>
         <span className="flex-1 text-left">
           <span className="text-sm font-semibold text-violet-800 block">Learn this subfield</span>
-          <span className="text-xs text-violet-400">Core concepts · Reading path · Open frontiers · Hidden connections</span>
+          <span className="text-xs text-violet-400">Plain-English overview · Reading list in order</span>
         </span>
         <span className="text-xs text-violet-300 group-hover:text-violet-500 transition-colors">Generate →</span>
       </button>
@@ -345,8 +331,8 @@ function SubfieldCurriculum({ field, subfield, topScientists }: {
     return (
       <div className="w-full py-8 flex flex-col items-center gap-3 bg-gradient-to-r from-violet-50 to-blue-50 border border-violet-200 rounded-2xl">
         <div className="w-7 h-7 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm font-semibold text-violet-700">Building your learning curriculum…</p>
-        <p className="text-xs text-violet-400">Fetching papers · Querying OpenAlex · Generating with Claude</p>
+        <p className="text-sm font-semibold text-violet-700">Building overview and reading list…</p>
+        <p className="text-xs text-violet-400">Fetching papers from OpenAlex · Generating with Claude</p>
       </div>
     );
   }
@@ -364,13 +350,13 @@ function SubfieldCurriculum({ field, subfield, topScientists }: {
     <div className="bg-white border border-violet-200 rounded-2xl overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-violet-50 to-blue-50 border-b border-violet-100">
         <div>
-          <h3 className="text-sm font-bold text-slate-900">📚 Learn: {subfield}</h3>
-          <p className="text-xs text-violet-500 mt-0.5">AI-generated from top papers · OpenAlex data</p>
+          <h3 className="text-sm font-bold text-slate-900">📚 {subfield}</h3>
+          <p className="text-xs text-violet-500 mt-0.5">AI-generated · OpenAlex papers</p>
         </div>
         <button onClick={() => setStatus('idle')} className="text-xs text-slate-400 hover:text-slate-700 px-2 py-1 rounded transition-colors">✕</button>
       </div>
       <div className="p-5">
-        {renderCurriculum(curriculum)}
+        {renderCurriculum(text)}
       </div>
     </div>
   );
