@@ -218,9 +218,44 @@ function ColGuide() {
   );
 }
 
+interface TopWork { title?: string; year?: number; citations?: number; journal?: string; doi?: string; }
+
+function renderSections(text: string) {
+  // Split on **Section Title** markers and render each as a labelled block
+  const parts = text.split(/\*\*([^*]+)\*\*/g);
+  const sections: Array<{ heading: string; body: string }> = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    sections.push({ heading: parts[i].trim(), body: (parts[i + 1] ?? '').trim() });
+  }
+  if (sections.length === 0) {
+    return <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{text}</p>;
+  }
+  const SECTION_COLORS: Record<string, string> = {
+    'Who is this scientist?':        'text-violet-700',
+    'What problems do they work on?':'text-blue-700',
+    'Most influential work':         'text-amber-700',
+    'Key contributions to their field': 'text-emerald-700',
+    'Why it matters':                'text-rose-700',
+  };
+  return (
+    <div className="space-y-4">
+      {sections.map(({ heading, body }) => (
+        <div key={heading}>
+          <h4 className={`text-xs font-bold uppercase tracking-wide mb-1 ${SECTION_COLORS[heading] ?? 'text-slate-600'}`}>
+            {heading}
+          </h4>
+          <p className="text-xs text-slate-700 leading-relaxed">{body}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ScientistExplain({ scientist, year }: { scientist: ParsedRow; year: string }) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [text, setText] = useState('');
+  const [enriched, setEnriched] = useState(false);
+  const [topWorks, setTopWorks] = useState<TopWork[]>([]);
 
   async function generate() {
     setStatus('loading');
@@ -237,22 +272,77 @@ function ScientistExplain({ scientist, year }: { scientist: ParsedRow; year: str
         }),
       });
       const data = await res.json();
-      if (data.explanation) { setText(data.explanation); setStatus('done'); }
-      else setStatus('error');
+      if (data.explanation) {
+        setText(data.explanation);
+        setEnriched(data.enriched ?? false);
+        setTopWorks(data.topWorks ?? []);
+        setStatus('done');
+      } else {
+        setStatus('error');
+      }
     } catch { setStatus('error'); }
   }
 
   if (status === 'idle') return (
     <button onClick={generate} className="mt-2 text-xs px-2.5 py-1 bg-violet-50 text-violet-700 border border-violet-200 rounded-lg hover:bg-violet-100 transition-colors font-medium">
-      ✦ Explain this scientist (plain English)
+      ✦ Generate detailed profile (plain English)
     </button>
   );
-  if (status === 'loading') return <p className="mt-2 text-xs text-slate-400 animate-pulse">Generating explanation…</p>;
-  if (status === 'error') return <p className="mt-2 text-xs text-red-500">Could not generate explanation. Check ANTHROPIC_API_KEY is set in Railway Variables.</p>;
+  if (status === 'loading') return (
+    <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+      <span className="w-3 h-3 border-2 border-violet-300 border-t-violet-600 rounded-full animate-spin flex-shrink-0" />
+      Looking up publications and generating profile…
+    </div>
+  );
+  if (status === 'error') return (
+    <p className="mt-2 text-xs text-red-500">Could not generate profile. Check that ANTHROPIC_API_KEY is set in Railway Variables.</p>
+  );
   return (
-    <div className="mt-3 p-3 bg-violet-50 border border-violet-200 rounded-xl text-xs text-slate-700 leading-relaxed">
-      <p className="font-semibold text-violet-700 mb-1">Plain-English explanation · Stanford {year}</p>
-      <p>{text}</p>
+    <div className="mt-4 rounded-xl border border-violet-200 overflow-hidden">
+      {/* Header */}
+      <div className="bg-violet-600 px-4 py-2.5 flex items-center justify-between">
+        <span className="text-white text-xs font-semibold">Scientist Profile · Stanford {year}</span>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${enriched ? 'bg-emerald-400 text-emerald-900' : 'bg-violet-400 text-violet-900'}`}>
+          {enriched ? '✓ OpenAlex enriched' : 'Stanford data only'}
+        </span>
+      </div>
+
+      {/* Sections */}
+      <div className="bg-violet-50 px-4 py-4">
+        {renderSections(text)}
+      </div>
+
+      {/* Top works list */}
+      {topWorks.length > 0 && (
+        <div className="bg-white border-t border-violet-100 px-4 py-3">
+          <h4 className="text-xs font-bold uppercase tracking-wide text-amber-700 mb-2">Most cited publications</h4>
+          <ol className="space-y-2">
+            {topWorks.map((w, i) => (
+              <li key={i} className="text-xs">
+                <div className="flex items-start gap-2">
+                  <span className="flex-shrink-0 w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    {w.doi ? (
+                      <a href={`https://doi.org/${w.doi}`} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-700 hover:underline leading-snug block">
+                        {w.title ?? 'Untitled'}
+                      </a>
+                    ) : (
+                      <span className="font-medium text-slate-800 leading-snug block">{w.title ?? 'Untitled'}</span>
+                    )}
+                    <span className="text-slate-400">
+                      {w.year && <span>{w.year}</span>}
+                      {w.journal && <span> · {w.journal}</span>}
+                      {w.citations !== undefined && (
+                        <span className="ml-1 text-blue-600 font-medium">{w.citations.toLocaleString()} citations</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }
