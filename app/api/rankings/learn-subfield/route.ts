@@ -82,6 +82,10 @@ export async function POST(req: NextRequest) {
   allWorks.sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
   const papers = allWorks.slice(0, 20);
 
+  const scientistList = topScientists.slice(0, 8)
+    .map((s) => `- ${s.name} (${s.institution})`)
+    .join('\n');
+
   const papersBlock = papers.map((w, i) => {
     const abstract = reconstructAbstract(w.abstract_inverted_index);
     const authors = (w.authorships ?? []).slice(0, 3).map((a) => a.author?.display_name).filter(Boolean).join(', ');
@@ -95,28 +99,35 @@ export async function POST(req: NextRequest) {
 
   const prompt = `You are explaining "${subfield}" (part of ${field}) to a curious, intelligent person who has never read an academic paper.
 
-Available papers from the world's most-cited researchers in this subfield:
-${papersBlock || 'No papers retrieved — draw on your knowledge of this field.'}
+Context — world's most-cited researchers in this subfield:
+${scientistList}
+
+Most-cited papers from OpenAlex (use only if genuinely influential):
+${papersBlock || 'None retrieved.'}
 
 Write two things only:
 
 PART 1 — OVERVIEW
-Write 1–2 paragraphs in plain English explaining what ${subfield} is, what questions it tries to answer, and why it matters to ordinary people. Explain every technical term the moment you use it. No jargon without explanation. Make it vivid and concrete.
+1–2 paragraphs in plain English: what ${subfield} is, what questions it tries to answer, and why it matters to real people. Explain every technical term the moment you use it. Vivid and concrete.
 
 PART 2 — READING LIST
-List the papers from above that a newcomer should read, ordered so each one builds naturally on what came before. For any essential classic not in the list above, include it and mark it [Classic].
+List ONLY the most influential books and papers a newcomer must read to understand this field — the works that every expert has read, that shaped how the field thinks, and that are still worth reading today. This means landmark papers, foundational textbooks, and important review articles. Do NOT list obscure or narrow papers just because they appeared in the OpenAlex data above.
 
-For each paper use exactly this format:
-[number]. "Title" — Authors (Year) · [cited_count] citations
-→ [One sentence: what this paper established or proved]
-→ Builds on: [paper number(s) it requires, or "no prior reading needed"]
+Draw primarily on your knowledge of what is genuinely influential in ${subfield}. If any papers from the OpenAlex list above are truly landmark works, include them. Otherwise ignore them.
 
-Include all papers that genuinely belong in a complete introduction to this field. Skip papers that are too narrow, too advanced, or redundant.
+Order the list so each entry builds on what came before — start with the most accessible and end with the most advanced.
+
+For each entry use exactly this format:
+[number]. "Title" — Author(s) (Year) [Book / Paper / Review]
+→ What it established: [one sentence]
+→ Read after: [entry number(s), or "nothing — start here"]
 
 Rules:
-- Plain English throughout. No "groundbreaking" or "seminal".
-- Every technical term explained in parentheses on first use.
-- Be complete — do not cut off the list.`;
+- Only include works that a leading expert in ${subfield} would immediately recognise as essential
+- Include books where they are more influential than papers (many fields have defining textbooks)
+- Plain English. Every technical term explained in parentheses on first use
+- Do not pad the list — 6 to 15 entries is right for most fields
+- Do not cut off before the list is complete`;
 
   try {
     const client = new Anthropic({ apiKey });
