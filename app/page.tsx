@@ -14,7 +14,6 @@ const ALL_SOURCES = [
   { id: 'arxiv',            label: 'arXiv',            short: 'arXiv',      color: 'bg-red-100 text-red-700 border-red-200',           activeColor: 'bg-red-600 text-white border-red-600',        needsKey: true },
   { id: 'europe-pmc',       label: 'Europe PMC',       short: 'Europe PMC', color: 'bg-violet-100 text-violet-700 border-violet-200',  activeColor: 'bg-violet-600 text-white border-violet-600',  needsKey: true },
   { id: 'eric',             label: 'ERIC',             short: 'ERIC',       color: 'bg-teal-100 text-teal-700 border-teal-200',        activeColor: 'bg-teal-600 text-white border-teal-600',      needsKey: true },
-  { id: 'google-scholar',   label: 'Google Scholar',   short: 'Scholar',    color: 'bg-sky-100 text-sky-700 border-sky-200',           activeColor: 'bg-sky-600 text-white border-sky-600',        needsKey: true },
 ];
 
 type SourceId = typeof ALL_SOURCES[number]['id'];

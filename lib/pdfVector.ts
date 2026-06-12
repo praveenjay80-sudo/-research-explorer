@@ -2,8 +2,9 @@ import { Paper } from '@/types';
 
 const FIELDS = ['title', 'authors', 'year', 'doi', 'totalCitations', 'abstract', 'url', 'source'];
 
-// All providers PDF Vector supports that are NOT already covered by direct S2/OA calls
-export const PV_PROVIDERS = ['pubmed', 'arxiv', 'europe-pmc', 'eric', 'google-scholar'] as const;
+// All providers PDF Vector supports that are NOT already covered by direct S2/OA calls.
+// google-scholar excluded: unreliable (bot detection) and returns low-quality results.
+export const PV_PROVIDERS = ['pubmed', 'arxiv', 'europe-pmc', 'eric'] as const;
 export type PVProvider = typeof PV_PROVIDERS[number];
 
 interface PVPaper {
@@ -53,24 +54,26 @@ export async function searchPdfVector(
       fields: FIELDS,
     })) as PVResult;
 
-    const papers: Paper[] = ((result.results ?? []) as PVPaper[]).map((p, i) => {
-      const doi = p.doi?.replace(/^https?:\/\/doi\.org\//i, '') || undefined;
-      return {
-        id: `pv-${offset + i}-${doi ?? p.title?.slice(0, 20) ?? i}`,
-        title: p.title ?? 'Untitled',
-        authors: normaliseAuthors(p.authors),
-        year: p.year ? Number(p.year) : null,
-        citationCount: p.totalCitations ?? 0,
-        abstract: p.abstract,
-        url: doi
-          ? `https://doi.org/${doi}`
-          : p.url ?? undefined,
-        source: 'pdfvector',
-        doi,
-        fieldsOfStudy: [],
-        workType: 'article',
-      };
-    });
+    const papers: Paper[] = ((result.results ?? []) as PVPaper[])
+      .filter((p) => p.title && (p.totalCitations ?? 0) > 0 || p.abstract)
+      .map((p, i) => {
+        const doi = p.doi?.replace(/^https?:\/\/doi\.org\//i, '') || undefined;
+        return {
+          id: `pv-${offset + i}-${doi ?? p.title?.slice(0, 20) ?? i}`,
+          title: p.title ?? 'Untitled',
+          authors: normaliseAuthors(p.authors),
+          year: p.year ? Number(p.year) : null,
+          citationCount: p.totalCitations ?? 0,
+          abstract: p.abstract,
+          url: doi
+            ? `https://doi.org/${doi}`
+            : p.url ?? undefined,
+          source: 'pdfvector',
+          doi,
+          fieldsOfStudy: [],
+          workType: 'article',
+        };
+      });
 
     return { papers, total: result.estimatedTotalResults ?? papers.length };
   } catch {
