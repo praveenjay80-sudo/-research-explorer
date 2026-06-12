@@ -282,22 +282,63 @@ export default function ImportPage() {
     try {
       const { read, utils } = await import('xlsx');
       const buffer = await file.arrayBuffer();
-      const wb = read(buffer, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw: unknown[][] = utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const wb = read(buffer, { type: 'array', cellDates: false, sheetStubs: true });
 
-      if (raw.length < 2) { setWarnings(['File appears empty or has only one row.']); return; }
+      // Score columns: how many known Stanford column names does this header row have?
+      const KNOWN = ['authfull', 'inst_name', 'cntry', 'sm-field', 'sm-subfield-1',
+                     'c', 'h23', 'h22', 'h21', 'np6023', 'np', 'cns23', 'domain', '#auth'];
+      function scoreHeaders(hdrs: string[]): number {
+        const low = hdrs.map((h) => h.toLowerCase().trim());
+        return KNOWN.filter((k) => low.some((h) => h === k || h.startsWith(k))).length;
+      }
 
-      const headers = (raw[0] as unknown[]).map((h) => String(h ?? ''));
-      const dataRows = (raw.slice(1) as unknown[][])
+      // Try every sheet, find the one whose first non-empty row looks most like a Stanford header
+      let bestSheetName = wb.SheetNames[0];
+      let bestHeaderRow = 0;
+      let bestScore = -1;
+
+      for (const sheetName of wb.SheetNames) {
+        const ws = wb.Sheets[sheetName];
+        const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
+        // Scan first 10 rows for a header candidate
+        for (let ri = 0; ri < Math.min(10, raw.length); ri++) {
+          const row = (raw[ri] as unknown[]).map((c) => String(c ?? ''));
+          if (row.filter((c) => c.trim()).length < 3) continue; // skip sparse rows
+          const sc = scoreHeaders(row);
+          if (sc > bestScore) { bestScore = sc; bestSheetName = sheetName; bestHeaderRow = ri; }
+        }
+      }
+
+      const ws = wb.Sheets[bestSheetName];
+      const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
+      const allRows = raw as unknown[][];
+
+      if (allRows.length <= bestHeaderRow + 1) {
+        const sheetList = wb.SheetNames.join(', ');
+        setWarnings([
+          `Could not find data rows. Sheets in this file: ${sheetList}.`,
+          `Best sheet tried: "${bestSheetName}" (header at row ${bestHeaderRow + 1}, score ${bestScore}).`,
+          `Make sure the file is the main Stanford data file (Table_1 or Table_2), not a summary or readme sheet.`,
+        ]);
+        return;
+      }
+
+      const headers = allRows[bestHeaderRow].map((h) => String(h ?? ''));
+      const dataRows = allRows
+        .slice(bestHeaderRow + 1)
         .map((r) => (r as unknown[]).map((c) => String(c ?? '')))
         .filter((r) => r.some((c) => c.trim()));
 
       const { rows, fieldStats, type, warnings: w } = parseSheetData(headers, dataRows);
-      setWarnings(w);
+      const diagInfo = `Sheet: "${bestSheetName}" · ${headers.length} columns · ${dataRows.length} rows`;
+      setWarnings(w.length ? w : w.concat());
 
       if (rows.length === 0 && fieldStats.length === 0) {
-        setWarnings((prev) => [...prev, 'No data rows could be parsed. Check the file format.']);
+        setWarnings([
+          `Parsed 0 records. ${diagInfo}.`,
+          `Detected headers: ${headers.slice(0, 16).join(', ')}${headers.length > 16 ? '…' : ''}`,
+          `Expected columns like "authfull", "c", "h23", "sm-field", "sm-subfield-1".`,
+        ]);
         return;
       }
 
