@@ -90,8 +90,8 @@ export default function HomePage() {
             <span className="font-bold text-slate-900 text-lg hidden sm:block">Research Explorer</span>
           </div>
           <nav className="hidden sm:flex items-center gap-1 flex-shrink-0">
-            <Link href="/rankings" className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
-              Rankings
+            <Link href="/rankings/import" className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+              Stanford Rankings
             </Link>
           </nav>
           <div className="flex-1">
