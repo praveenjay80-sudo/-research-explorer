@@ -255,6 +255,127 @@ function renderSections(text: string) {
   );
 }
 
+// ── Subfield curriculum ───────────────────────────────────────────────────
+const CURRICULUM_COLORS: Record<string, { heading: string; bg: string; border: string }> = {
+  'Why this field matters':                    { heading: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
+  'The intellectual landscape':                { heading: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
+  'Core concepts you need in your head first': { heading: 'text-purple-700',  bg: 'bg-purple-50',  border: 'border-purple-200' },
+  'Your reading path':                         { heading: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200' },
+  'The open frontiers':                        { heading: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  'The hidden connections':                    { heading: 'text-teal-700',    bg: 'bg-teal-50',    border: 'border-teal-200' },
+  'If you want to go deeper':                  { heading: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
+};
+
+function renderCurriculum(text: string) {
+  const parts = text.split(/\*\*([^*]+)\*\*/g);
+  const sections: Array<{ heading: string; body: string }> = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    sections.push({ heading: parts[i].trim(), body: (parts[i + 1] ?? '').trim() });
+  }
+  if (sections.length === 0) {
+    return <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{text}</p>;
+  }
+  return (
+    <div className="space-y-3">
+      {sections.map(({ heading, body }) => {
+        const c = CURRICULUM_COLORS[heading] ?? { heading: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200' };
+        return (
+          <div key={heading} className={`rounded-xl border p-4 ${c.bg} ${c.border}`}>
+            <h4 className={`text-[11px] font-bold uppercase tracking-widest mb-2.5 ${c.heading}`}>{heading}</h4>
+            <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{body}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const _curriculumCache = new Map<string, string>();
+
+function SubfieldCurriculum({ field, subfield, topScientists }: {
+  field: string;
+  subfield: string;
+  topScientists: Array<{ name: string; institution: string; citations: number }>;
+}) {
+  const cacheKey = `${field}::${subfield}`;
+  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [curriculum, setCurriculum] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const cached = _curriculumCache.get(cacheKey);
+    if (cached) { setCurriculum(cached); setStatus('done'); }
+    else { setStatus('idle'); setCurriculum(''); }
+  }, [cacheKey]);
+
+  async function generate() {
+    setStatus('loading');
+    try {
+      const res = await fetch('/api/rankings/learn-subfield', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, subfield, topScientists }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json() as { curriculum: string };
+      _curriculumCache.set(cacheKey, json.curriculum);
+      setCurriculum(json.curriculum);
+      setStatus('done');
+    } catch (e) {
+      setError(String(e));
+      setStatus('error');
+    }
+  }
+
+  if (status === 'idle') {
+    return (
+      <button onClick={generate}
+        className="w-full flex items-center gap-3 py-3.5 px-5 bg-gradient-to-r from-violet-50 to-blue-50 hover:from-violet-100 hover:to-blue-100 border border-violet-200 hover:border-violet-300 rounded-2xl transition-all group">
+        <span className="text-xl">📚</span>
+        <span className="flex-1 text-left">
+          <span className="text-sm font-semibold text-violet-800 block">Learn this subfield</span>
+          <span className="text-xs text-violet-400">Core concepts · Reading path · Open frontiers · Hidden connections</span>
+        </span>
+        <span className="text-xs text-violet-300 group-hover:text-violet-500 transition-colors">Generate →</span>
+      </button>
+    );
+  }
+
+  if (status === 'loading') {
+    return (
+      <div className="w-full py-8 flex flex-col items-center gap-3 bg-gradient-to-r from-violet-50 to-blue-50 border border-violet-200 rounded-2xl">
+        <div className="w-7 h-7 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm font-semibold text-violet-700">Building your learning curriculum…</p>
+        <p className="text-xs text-violet-400">Fetching papers · Querying OpenAlex · Generating with Claude</p>
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 flex items-center gap-3">
+        <span>Failed: {error}</span>
+        <button onClick={() => setStatus('idle')} className="ml-auto text-xs underline text-red-500">Try again</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-violet-200 rounded-2xl overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-violet-50 to-blue-50 border-b border-violet-100">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900">📚 Learn: {subfield}</h3>
+          <p className="text-xs text-violet-500 mt-0.5">AI-generated from top papers · OpenAlex data</p>
+        </div>
+        <button onClick={() => setStatus('idle')} className="text-xs text-slate-400 hover:text-slate-700 px-2 py-1 rounded transition-colors">✕</button>
+      </div>
+      <div className="p-5">
+        {renderCurriculum(curriculum)}
+      </div>
+    </div>
+  );
+}
+
 function ScientistExplain({ scientist, year }: { scientist: ParsedRow; year: string }) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [text, setText] = useState('');
@@ -834,6 +955,17 @@ export default function ImportPage() {
               </h2>
               <span className="text-xs px-2 py-0.5 bg-red-50 text-red-600 rounded-full font-medium">Stanford {activeDataset.year}</span>
             </div>
+
+            {/* Learn this subfield — shown whenever a specific subfield is selected */}
+            {selectedSubfield && (
+              <SubfieldCurriculum
+                field={selectedField || filtered[0]?.field || ''}
+                subfield={selectedSubfield}
+                topScientists={[...filtered].sort((a, b) => b.citations - a.citations).slice(0, 10).map((s) => ({
+                  name: s.name, institution: s.institution, citations: s.citations,
+                }))}
+              />
+            )}
 
             {/* Scientist cards */}
             <div className="space-y-2.5">
