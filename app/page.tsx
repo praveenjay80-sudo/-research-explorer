@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import SearchBar from '@/components/SearchBar';
 import PaperList from '@/components/PaperList';
 import ConceptMap from '@/components/ConceptMap';
@@ -88,6 +89,11 @@ export default function HomePage() {
             </div>
             <span className="font-bold text-slate-900 text-lg hidden sm:block">Research Explorer</span>
           </div>
+          <nav className="hidden sm:flex items-center gap-1 flex-shrink-0">
+            <Link href="/rankings" className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+              Rankings
+            </Link>
+          </nav>
           <div className="flex-1">
             <SearchBar onSearch={handleSearch} loading={loading} initialQuery={query} />
           </div>
