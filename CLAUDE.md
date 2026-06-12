@@ -13,8 +13,9 @@ Next.js 15 (App Router) · TypeScript · Tailwind CSS · Railway deployment (Doc
 ## Key files
 
 ### Rankings feature
-- `app/rankings/import/page.tsx` — main import page (file upload, multi-year tabs, field/subfield filter, scientist cards)
+- `app/rankings/import/page.tsx` — main import page (file upload, multi-year tabs, field/subfield filter, scientist cards, SubfieldCurriculum component)
 - `app/api/rankings/explain/route.ts` — POST: looks up scientist on OpenAlex, generates structured 5-section profile via Claude Sonnet
+- `app/api/rankings/learn-subfield/route.ts` — POST: generates plain-English overview + ordered reading list for a subfield-within-field; fetches papers via OpenAlex topics API but relies on Claude's knowledge for influential works
 - `app/api/rankings/bio/route.ts` — POST: shorter bio from full OpenAlex profile (used on profile detail pages)
 - `app/rankings/[authorId]/page.tsx` — individual scientist profile page (OpenAlex authors)
 - `lib/rankings.ts` — OpenAlex data fetching helpers (fields, subfields, ranked scientists, profiles, works)
@@ -61,6 +62,26 @@ Requires `ANTHROPIC_API_KEY` env var (set in Railway Variables).
 
 ## Env vars needed in Railway
 - `ANTHROPIC_API_KEY` — required for AI explain and bio features
+
+## Learn Subfield endpoint notes
+`/api/rankings/learn-subfield` generates overview + reading list for a subfield-within-field.
+- Always frames the subject as `"${subfield} as practised within ${field}"` — same subfield name in different fields (e.g. Statistics in Mathematics vs Medicine) gets different output.
+- Fetches up to 20 papers via OpenAlex topics API as hints, but instructs Claude to draw on its own knowledge of influential works and ignore OpenAlex results if they aren't landmark.
+- Reading list format: numbered entries ordered so each builds on the previous, annotated with what it established and what to read first.
+- Uses `claude-sonnet-4-6`, max_tokens 3000.
+- Results cached in-memory in the browser (module-level Map) — survives subfield switching without re-fetching.
+
+## Dataset persistence
+- Imported Stanford datasets are stored in **IndexedDB** (`research-explorer` db, `datasets` store, key `state`).
+- localStorage was tried first but silently fails at ~5MB — Stanford datasets with 50k+ rows easily exceed this.
+- Data survives page refreshes and redeployments (stored in browser, not server).
+- Cleared when user deletes all year tabs.
+
+## Column detection notes
+- `findCol()` does exact match first, then partial match — but partial match is skipped for aliases shorter than 3 chars to prevent `'c'` matching `cns24`, `cntry`, etc.
+- 2024/2025 year-specific columns added: `nc6024`, `nc6025`, `nc9624`, `nc9625`, `h24`, `h25`, `np6024`, `np6025`, `cns24`, `cns25`.
+- In the Stanford dataset, `c` = career citations (exact match only), `cns24` = composite c-score.
+- `Math.round()` applied to citations, hIndex, and works to prevent float display from wrong-column matches.
 
 ## Important patterns
 - OpenAlex filter URLs must NOT be URLSearchParams-encoded (colons would get encoded breaking the API).
