@@ -30,53 +30,81 @@ function reconstructAbstract(inv: Record<string, number[]> | null | undefined): 
   for (const [word, positions] of Object.entries(inv)) {
     for (const pos of positions) pairs.push([pos, word]);
   }
-  return pairs.sort((a, b) => a[0] - b[0]).map(([, w]) => w).join(' ').slice(0, 600);
+  return pairs.sort((a, b) => a[0] - b[0]).map(([, w]) => w).join(' ').slice(0, 500);
 }
 
-async function lookupAuthorOnOpenAlex(name: string, institution: string): Promise<{
+// Normalise a name for comparison: remove punctuation, lowercase, sort tokens
+function normaliseName(n: string): string[] {
+  return n.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/).filter((t) => t.length > 1);
+}
+
+function nameOverlap(a: string, b: string): number {
+  const ta = new Set(normaliseName(a));
+  const tb = new Set(normaliseName(b));
+  let shared = 0;
+  for (const t of ta) if (tb.has(t)) shared++;
+  return shared / Math.max(ta.size, tb.size, 1);
+}
+
+async function lookupAuthor(name: string, institution: string, targetCitations: number): Promise<{
   author: OAAuthor | null;
   topWorks: OAWork[];
+  confident: boolean;
 }> {
   try {
-    // Search by name
-    const searchParams = new URLSearchParams({
+    const params = new URLSearchParams({
       search: name,
-      'per-page': '5',
+      'per-page': '10',
       select: 'id,display_name,last_known_institutions,cited_by_count,works_count,summary_stats,topics',
       mailto: MAILTO,
     });
-    const authRes = await fetch(`${OA_BASE}/authors?${searchParams}`, { next: { revalidate: 86400 } });
-    if (!authRes.ok) return { author: null, topWorks: [] };
-    const authData = await authRes.json();
-    const candidates: OAAuthor[] = authData.results ?? [];
-    if (candidates.length === 0) return { author: null, topWorks: [] };
+    const res = await fetch(`${OA_BASE}/authors?${params}`, { next: { revalidate: 86400 } });
+    if (!res.ok) return { author: null, topWorks: [], confident: false };
+    const data = await res.json();
+    const candidates: OAAuthor[] = data.results ?? [];
 
-    // Pick the best match — prefer one whose institution name overlaps
-    const instLower = institution.toLowerCase();
-    const ranked = candidates.sort((a, b) => {
-      const aInst = a.last_known_institutions?.[0]?.display_name?.toLowerCase() ?? '';
-      const bInst = b.last_known_institutions?.[0]?.display_name?.toLowerCase() ?? '';
-      const aMatch = instLower && aInst.includes(instLower.split(' ')[0]) ? 1 : 0;
-      const bMatch = instLower && bInst.includes(instLower.split(' ')[0]) ? 1 : 0;
-      return bMatch - aMatch;
+    // Score each candidate: name overlap + citation count proximity + institution overlap
+    const scored = candidates.map((c) => {
+      const nameSim = nameOverlap(name, c.display_name);
+      const oaCites = c.cited_by_count ?? 0;
+      // Citation ratio — must be within 3× either way for any confidence
+      const citesRatio = targetCitations > 500
+        ? Math.min(oaCites, targetCitations) / Math.max(oaCites, targetCitations)
+        : 1; // don't penalise if target is small/unknown
+      const instSim = institution && c.last_known_institutions?.[0]
+        ? nameOverlap(institution, c.last_known_institutions[0].display_name)
+        : 0;
+      const score = nameSim * 0.5 + citesRatio * 0.35 + instSim * 0.15;
+      return { candidate: c, score, nameSim, citesRatio };
     });
-    const author = ranked[0];
 
-    // Fetch top 5 most-cited works with abstracts
-    const authorShortId = author.id.replace('https://openalex.org/', '');
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+
+    // Require a minimum confidence to avoid writing about the wrong person
+    // nameSim must be ≥ 0.4 (last name matches) AND citesRatio ≥ 0.25
+    const confident =
+      best &&
+      best.nameSim >= 0.4 &&
+      (targetCitations < 500 || best.citesRatio >= 0.25);
+
+    if (!confident) return { author: null, topWorks: [], confident: false };
+
+    const author = best.candidate;
+    const shortId = author.id.replace('https://openalex.org/', '');
     const worksParams = new URLSearchParams({
-      filter: `authorships.author.id:${authorShortId}`,
+      filter: `authorships.author.id:${shortId}`,
       sort: 'cited_by_count:desc',
       'per-page': '5',
       select: 'id,title,publication_year,cited_by_count,doi,primary_location,abstract_inverted_index',
       mailto: MAILTO,
     });
     const worksRes = await fetch(`${OA_BASE}/works?${worksParams}`, { next: { revalidate: 86400 } });
-    if (!worksRes.ok) return { author, topWorks: [] };
-    const worksData = await worksRes.json();
-    return { author, topWorks: worksData.results ?? [] };
+    const topWorks: OAWork[] = worksRes.ok ? ((await worksRes.json()).results ?? []) : [];
+
+    return { author, topWorks, confident: true };
   } catch {
-    return { author: null, topWorks: [] };
+    return { author: null, topWorks: [], confident: false };
   }
 }
 
@@ -99,62 +127,66 @@ export async function POST(req: NextRequest) {
     selfShare?: number;
   };
 
-  const { name, institution, field, subfield, citations, hIndex, works, cScore, firstYear, lastYear, selfShare } = body;
+  const { name, institution, field, subfield, citations, hIndex, works,
+          cScore, firstYear, lastYear, selfShare } = body;
   const careerSpan = firstYear && lastYear ? `${firstYear}–${lastYear}` : firstYear ? `since ${firstYear}` : '';
 
-  // Enrich with OpenAlex data
-  const { author: oaAuthor, topWorks } = await lookupAuthorOnOpenAlex(name, institution);
+  const { author: oaAuthor, topWorks, confident } = await lookupAuthor(name, institution, citations);
 
-  // Build works section
-  const workLines = topWorks.map((w, i) => {
-    const abstract = reconstructAbstract(w.abstract_inverted_index);
-    const journal = w.primary_location?.source?.display_name ?? '';
-    return [
-      `${i + 1}. "${w.title ?? 'Untitled'}"${w.publication_year ? ` (${w.publication_year})` : ''}`,
-      `   Citations: ${(w.cited_by_count ?? 0).toLocaleString()}${journal ? ` · Published in: ${journal}` : ''}`,
-      abstract ? `   Abstract excerpt: ${abstract}` : '',
-    ].filter(Boolean).join('\n');
-  }).join('\n\n');
+  // Build works block only when we're confident it's the right person
+  let worksBlock = '';
+  if (confident && topWorks.length > 0) {
+    worksBlock = topWorks.map((w, i) => {
+      const abstract = reconstructAbstract(w.abstract_inverted_index);
+      const journal = w.primary_location?.source?.display_name ?? '';
+      return [
+        `${i + 1}. "${w.title ?? 'Untitled'}"${w.publication_year ? ` (${w.publication_year})` : ''}`,
+        `   Cited by ${(w.cited_by_count ?? 0).toLocaleString()} papers${journal ? ` · ${journal}` : ''}`,
+        abstract ? `   Abstract: ${abstract}` : '',
+      ].filter(Boolean).join('\n');
+    }).join('\n\n');
+  }
 
-  const oaTopics = oaAuthor?.topics?.slice(0, 6).map((t) => t.display_name).join(', ') ?? '';
+  const oaTopics = (confident && oaAuthor?.topics)
+    ? oaAuthor.topics.slice(0, 5).map((t) => t.display_name).join(', ')
+    : '';
 
-  const prompt = `You are writing a detailed, structured profile of a scientist for someone who has never read an academic paper. Use clear, everyday language throughout — explain every technical term the moment you use it.
+  const prompt = `You are writing a detailed scientist profile for someone who has never read an academic paper. Use plain, everyday language. Explain every technical term the moment you use it.
 
-## Scientist data
+## Data for ${name}
 
-Name: ${name}
 Institution: ${institution}
-Field: ${field} → ${subfield}
-Career citations: ${citations.toLocaleString()} (every time another scientist's paper references their work counts as one citation)
-H-index: ${hIndex} (means they have ${hIndex} papers each cited at least ${hIndex} times)
-Total papers: ${works.toLocaleString()}${careerSpan ? `\nActive years: ${careerSpan}` : ''}${cScore !== undefined ? `\nC-score: ${cScore.toFixed(3)} (composite impact metric — higher = more influential)` : ''}${selfShare !== undefined ? `\nSelf-citation share: ${(selfShare * 100).toFixed(0)}% (${selfShare < 0.15 ? 'low — good sign' : selfShare < 0.3 ? 'moderate' : 'relatively high'})` : ''}${oaTopics ? `\nResearch topics: ${oaTopics}` : ''}
+Research area: ${field} › ${subfield}
+Career citations: ${citations.toLocaleString()} (the number of times other scientists have referenced their work)
+H-index: ${hIndex} (means they have ${hIndex} papers each cited ≥${hIndex} times by other researchers)
+Total published papers: ${works.toLocaleString()}${careerSpan ? `\nActive career: ${careerSpan}` : ''}${cScore !== undefined ? `\nC-score: ${cScore.toFixed(3)} (composite impact metric used by Stanford; higher = more influential globally)` : ''}${selfShare !== undefined ? `\nSelf-citation rate: ${(selfShare * 100).toFixed(0)}%` : ''}${oaTopics ? `\nSpecific research topics: ${oaTopics}` : ''}
 
-${topWorks.length > 0 ? `## Most cited publications\n\n${workLines}` : ''}
+${worksBlock ? `## Their actual most-cited publications (use these for the "Most Influential Work" section)\n\n${worksBlock}` : '## Note: No verified publication data available — do NOT invent specific paper titles or findings. Describe the type of work researchers in this subfield typically do instead.'}
 
-## Your task
-
-Write a profile with exactly these five sections. Use the section headers exactly as shown. Keep the language simple enough for a curious teenager.
+## Write a profile with exactly these five section headings
 
 **Who is this scientist?**
-2–3 sentences. Where do they work, what broad area of science do they work in, and how long have they been active? Explain what their field studies in one plain sentence.
+2–3 sentences. State their name, institution, and the field they work in — described in plain terms. Mention how long they have been active if known.
 
 **What problems do they work on?**
-2–3 sentences. What specific questions or challenges does their research address? Why do these problems matter to ordinary people (health, technology, environment, etc.)?
+2–3 sentences. Describe the specific scientific questions or real-world challenges their subfield addresses. Connect it to why ordinary people should care (health, technology, environment, safety, etc.).
 
 **Most influential work**
-3–4 sentences. Describe their single most-cited paper (the first one listed above if available). What question did it ask? What did it discover or create? Why did so many other scientists find it important enough to cite? Avoid equations — use analogies.
+3–4 sentences. ${worksBlock
+  ? 'Describe their single most-cited paper listed above. What question did it ask? What did it find or create? Why did so many other researchers cite it? Use an everyday analogy — no equations.'
+  : 'Describe the type of research that top researchers in this subfield typically pursue. What kinds of questions do they investigate and what methods do they use? Be general — do NOT invent specific paper titles or results.'}
 
 **Key contributions to their field**
-3–4 sentences. Summarise the pattern across their top papers. What ideas, methods, tools, or discoveries have they introduced or advanced? How has their field changed because of their work?
+3–4 sentences. Based on their career metrics and research area, describe what a scientist with this profile likely contributed to their field. What ideas, tools, or methods does their subfield rely on? How has the field changed in their career period?
 
 **Why it matters**
-2–3 sentences. Connect their research to real-world impact — medical treatments, technologies, policy, everyday life. Who ultimately benefits from this work and how?
+2–3 sentences. Connect this area of research to concrete real-world benefits — medical treatments developed, technologies created, lives improved, policies informed. Be specific to the subfield.
 
-Rules:
-- Base every claim on the data provided above. Do not invent awards, prizes, university degrees, or biographical facts not listed.
-- If no publication data is available, write the "Most influential work" section based on their field and subfield instead.
-- Explain every technical term the first time you use it (e.g. "machine learning — a way of teaching computers to recognise patterns without being explicitly programmed").
-- Never use phrases like "groundbreaking", "pioneering", "revolutionary", "seminal" — show impact through facts and numbers instead.`;
+## Rules
+- Every fact must come from the data above. Do not invent awards, university degrees, specific collaborators, or paper titles not listed.
+- Explain every technical term immediately in parentheses.
+- Never use: "groundbreaking", "pioneering", "revolutionary", "seminal", "landmark" — show impact through numbers instead.
+- Write as if explaining to a curious 16-year-old.`;
 
   try {
     const client = new Anthropic({ apiKey });
@@ -167,14 +199,14 @@ Rules:
 
     return NextResponse.json({
       explanation: text,
-      enriched: !!oaAuthor,
-      topWorks: topWorks.map((w) => ({
+      enriched: confident,
+      topWorks: confident ? topWorks.map((w) => ({
         title: w.title,
         year: w.publication_year,
         citations: w.cited_by_count,
         journal: w.primary_location?.source?.display_name,
         doi: w.doi,
-      })),
+      })) : [],
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
