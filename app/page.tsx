@@ -13,7 +13,8 @@ const ALL_SOURCES = [
   { id: 'pubmed',           label: 'PubMed',           short: 'PubMed',     color: 'bg-blue-100 text-blue-700 border-blue-200',        activeColor: 'bg-blue-600 text-white border-blue-600',      needsKey: true },
   { id: 'arxiv',            label: 'arXiv',            short: 'arXiv',      color: 'bg-red-100 text-red-700 border-red-200',           activeColor: 'bg-red-600 text-white border-red-600',        needsKey: true },
   { id: 'europe-pmc',       label: 'Europe PMC',       short: 'Europe PMC', color: 'bg-violet-100 text-violet-700 border-violet-200',  activeColor: 'bg-violet-600 text-white border-violet-600',  needsKey: true },
-  { id: 'eric',             label: 'ERIC',             short: 'ERIC',       color: 'bg-teal-100 text-teal-700 border-teal-200',        activeColor: 'bg-teal-600 text-white border-teal-600',      needsKey: true },
+  { id: 'eric',             label: 'ERIC',             short: 'ERIC',         color: 'bg-teal-100 text-teal-700 border-teal-200',          activeColor: 'bg-teal-600 text-white border-teal-600',        needsKey: true },
+  { id: 'google-scholar',   label: 'Google Scholar',   short: 'Scholar',      color: 'bg-sky-100 text-sky-700 border-sky-200',             activeColor: 'bg-sky-600 text-white border-sky-600',          needsKey: true },
 ];
 
 type SourceId = typeof ALL_SOURCES[number]['id'];
@@ -168,12 +169,14 @@ export default function HomePage() {
           </div>
           <nav className="hidden sm:flex items-center gap-1 flex-shrink-0">
             <Link href="/rankings/import" className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
-              Stanford Rankings
+              Rankings
             </Link>
           </nav>
-          <div className="flex-1">
-            <SearchBar onSearch={handleSearch} loading={loading} initialQuery={query} />
-          </div>
+          {hasSearched && (
+            <div className="flex-1">
+              <SearchBar onSearch={handleSearch} loading={loading} initialQuery={activeQuery} />
+            </div>
+          )}
         </div>
       </header>
 
@@ -181,49 +184,49 @@ export default function HomePage() {
 
         {/* ── Hero ── */}
         {!hasSearched && (
-          <section className="py-16 text-center">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-50 border border-red-200 rounded-full text-xs font-semibold text-red-700 mb-5">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              Stanford Top 2% Rankings now available — import any year
-            </div>
-            <h1 className="text-4xl sm:text-5xl font-bold text-slate-900 mb-4 leading-tight">
-              Explore Academic Research<br />
-              <span className="text-blue-600">& World-Leading Scientists</span>
+          <section className="pt-12 pb-8 text-center max-w-3xl mx-auto">
+            <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 mb-2 leading-tight">
+              Search across <span className="text-blue-600">7 academic databases</span>
             </h1>
-            <p className="text-lg text-slate-500 mb-8 max-w-2xl mx-auto">
-              Search papers, explore concept maps, and browse Stanford&apos;s official rankings of the most-cited scientists on Earth — with AI-generated plain-English profiles.
+            <p className="text-slate-500 text-sm mb-6">
+              Semantic Scholar · OpenAlex · PubMed · arXiv · Europe PMC · ERIC · Google Scholar
             </p>
+
+            {/* Big search bar */}
+            <div className="mb-4">
+              <SearchBar onSearch={handleSearch} loading={loading} initialQuery={query} />
+            </div>
+
             {/* Database selector */}
-            <div className="flex flex-wrap justify-center gap-1.5 mb-5">
+            <div className="flex flex-wrap justify-center gap-1.5 mb-6">
               {ALL_SOURCES.map((src) => {
                 const active = selectedSources.has(src.id);
                 return (
                   <button
                     key={src.id}
                     onClick={() => toggleSource(src.id)}
-                    title={src.needsKey ? `${src.label} — requires PDFVECTOR_API_KEY` : src.label}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-semibold transition-all ${active ? src.activeColor : src.color} ${src.needsKey ? 'opacity-80' : ''}`}
+                    title={src.needsKey ? `${src.label} — requires API key` : src.label}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-semibold transition-all ${active ? src.activeColor : src.color}`}
                   >
                     {active && <span className="text-[9px]">✓</span>}
                     {src.short}
-                    {src.needsKey && !active && <span className="text-[9px] opacity-60">🔑</span>}
                   </button>
                 );
               })}
             </div>
 
-            <div className="flex flex-wrap justify-center gap-2 mb-4">
+            {/* Example topics */}
+            <div className="flex flex-wrap justify-center gap-2">
               {EXAMPLE_TOPICS.map((t) => (
                 <button
                   key={t}
                   onClick={() => handleSearch(t)}
-                  className="px-4 py-2 rounded-full border border-slate-200 bg-white text-sm text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors shadow-sm"
+                  className="px-3 py-1.5 rounded-full border border-slate-200 bg-white text-xs text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors"
                 >
                   {t}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-slate-400">Or type any topic in the search bar above</p>
           </section>
         )}
 
@@ -371,14 +374,36 @@ export default function HomePage() {
                 ) : (
                   <ConceptMap graph={conceptGraph} height={420} onSearch={handleSearch} />
                 )}
-                {!loading && conceptGraph.nodes.length > 0 && (
-                  <div className="bg-white rounded-xl border border-slate-200 p-3 text-xs text-slate-500 space-y-1">
-                    <p className="font-semibold text-slate-700 mb-1.5">How to read</p>
-                    <p>Nodes higher up = broader fields · Nodes lower = narrow topics</p>
-                    <p>Arrow direction shows broader → narrower relationships</p>
-                    <p>Node size reflects how widely studied the concept is</p>
-                  </div>
-                )}
+                {!loading && conceptGraph.nodes.length > 0 && (() => {
+                  const broader  = conceptGraph.nodes.filter((n) => n.id.startsWith('ai-b-'));
+                  const related  = conceptGraph.nodes.filter((n) => n.id.startsWith('ai-r-'));
+                  const narrower = conceptGraph.nodes.filter((n) => n.id.startsWith('ai-n-'));
+                  if (!broader.length && !related.length && !narrower.length) return null;
+                  const Section = ({ label, nodes, chipCls }: { label: string; nodes: typeof broader; chipCls: string }) => (
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: 'inherit' }}>{label}</p>
+                      <div className="flex flex-wrap gap-1">
+                        {nodes.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() => handleSearch(n.name)}
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-all hover:opacity-80 ${chipCls}`}
+                          >
+                            {n.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                      <p className="text-xs font-semibold text-slate-700">Related concepts — click to search</p>
+                      {broader.length  > 0 && <Section label="Broader fields"   nodes={broader}  chipCls="bg-slate-100 text-slate-600 border-slate-200 text-slate-700" />}
+                      {related.length  > 0 && <Section label="Related topics"   nodes={related}  chipCls="bg-blue-50 text-blue-700 border-blue-200" />}
+                      {narrower.length > 0 && <Section label="Narrower topics"  nodes={narrower} chipCls="bg-violet-50 text-violet-700 border-violet-200" />}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
             <div className="flex-1 min-w-0">

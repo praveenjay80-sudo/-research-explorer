@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { searchSemanticScholar } from '@/lib/semanticScholar';
 import { searchOpenAlex, findBestConcept, fetchTopicConceptGraph } from '@/lib/openAlex';
 import { searchPdfVector, PV_PROVIDERS } from '@/lib/pdfVector';
+import { searchGoogleScholar } from '@/lib/serpApi';
 import { generateKeywords } from '@/lib/ai';
 import { Paper, ConceptGraph, ConceptNode } from '@/types';
 
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
   const selectedSources = sourcesParam ? new Set(sourcesParam.split(',')) : null;
   const useS2 = !selectedSources || selectedSources.has('semantic-scholar');
   const useOA = !selectedSources || selectedSources.has('openalex');
+  const useGS = !selectedSources || selectedSources.has('google-scholar');
   const pvProviders = PV_PROVIDERS.filter((p) => !selectedSources || selectedSources.has(p));
 
   const conceptIdParam = searchParams.get('conceptId') ?? undefined;
@@ -54,10 +56,11 @@ export async function GET(request: NextRequest) {
   if (page === 1) {
     // Run concept lookup and all paper searches concurrently
     const conceptPromise = useOA ? findBestConcept(query).catch(() => null) : Promise.resolve(null);
-    const [s2Raw, oaRaw, pvRaw] = await Promise.allSettled([
+    const [s2Raw, oaRaw, pvRaw, gsRaw] = await Promise.allSettled([
       useS2 ? searchSemanticScholar(query, 0, 50) : Promise.resolve({ papers: [], total: 0 }),
       useOA ? searchOpenAlex(query, 1, 100, undefined) : Promise.resolve({ papers: [], total: 0 }),
       pvProviders.length > 0 ? searchPdfVector(query, 0, 25, pvProviders) : Promise.resolve({ papers: [], total: 0 }),
+      useGS ? searchGoogleScholar(query, 0, 20) : Promise.resolve({ papers: [], total: 0 }),
     ]);
 
     const concept = await conceptPromise;
@@ -66,15 +69,17 @@ export async function GET(request: NextRequest) {
     const s2Papers = s2Raw.status === 'fulfilled' ? s2Raw.value.papers : [];
     const oaPapers = oaRaw.status === 'fulfilled' ? oaRaw.value.papers : [];
     const pvPapers = pvRaw.status === 'fulfilled' ? pvRaw.value.papers : [];
+    const gsPapers = gsRaw.status === 'fulfilled' ? gsRaw.value.papers : [];
     const totalCount = Math.max(
       s2Raw.status === 'fulfilled' ? s2Raw.value.total : 0,
       oaRaw.status === 'fulfilled' ? oaRaw.value.total : 0,
       pvRaw.status === 'fulfilled' ? pvRaw.value.total : 0,
+      gsRaw.status === 'fulfilled' ? gsRaw.value.total : 0,
     );
 
-    // Deduplicate and sort (OA first — best metadata, then S2, then PV for new sources)
+    // Deduplicate by DOI: OA first (best metadata), then S2, then GS, then PV
     const paperMap = new Map<string, Paper>();
-    for (const paper of [...oaPapers, ...s2Papers, ...pvPapers]) {
+    for (const paper of [...oaPapers, ...s2Papers, ...gsPapers, ...pvPapers]) {
       const key = paper.doi ? `doi:${paper.doi.toLowerCase()}` : paper.id;
       const existing = paperMap.get(key);
       if (!existing) {
@@ -103,23 +108,27 @@ export async function GET(request: NextRequest) {
 
   // Subsequent pages
   const pvOffset = (page - 1) * 25;
-  const [s2Result, oaResult, pvResult] = await Promise.allSettled([
+  const gsStart = (page - 1) * 20;
+  const [s2Result, oaResult, pvResult, gsResult] = await Promise.allSettled([
     useS2 ? searchSemanticScholar(query, (page - 1) * 50, 50) : Promise.resolve({ papers: [], total: 0 }),
     useOA ? searchOpenAlex(query, page, 100, conceptId) : Promise.resolve({ papers: [], total: 0 }),
     pvProviders.length > 0 ? searchPdfVector(query, pvOffset, 25, pvProviders) : Promise.resolve({ papers: [], total: 0 }),
+    useGS ? searchGoogleScholar(query, gsStart, 20) : Promise.resolve({ papers: [], total: 0 }),
   ]);
 
   const s2Papers = s2Result.status === 'fulfilled' ? s2Result.value.papers : [];
   const oaPapers = oaResult.status === 'fulfilled' ? oaResult.value.papers : [];
   const pvPapers = pvResult.status === 'fulfilled' ? pvResult.value.papers : [];
+  const gsPapers = gsResult.status === 'fulfilled' ? gsResult.value.papers : [];
   const totalCount = Math.max(
     s2Result.status === 'fulfilled' ? s2Result.value.total : 0,
     oaResult.status === 'fulfilled' ? oaResult.value.total : 0,
     pvResult.status === 'fulfilled' ? pvResult.value.total : 0,
+    gsResult.status === 'fulfilled' ? gsResult.value.total : 0,
   );
 
   const paperMap = new Map<string, Paper>();
-  for (const paper of [...oaPapers, ...s2Papers, ...pvPapers]) {
+  for (const paper of [...oaPapers, ...s2Papers, ...gsPapers, ...pvPapers]) {
     const key = paper.doi ? `doi:${paper.doi.toLowerCase()}` : paper.id;
     const existing = paperMap.get(key);
     if (!existing) {

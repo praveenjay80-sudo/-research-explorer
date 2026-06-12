@@ -13,7 +13,8 @@ const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
   'semantic-scholar': { label: 'S2', color: 'bg-orange-100 text-orange-700' },
   openalex:           { label: 'OA', color: 'bg-green-100 text-green-700' },
   merged:             { label: 'Multi', color: 'bg-blue-100 text-blue-700' },
-  pdfvector:          { label: 'PV', color: 'bg-purple-100 text-purple-700' },
+  pdfvector:          { label: 'PV',      color: 'bg-purple-100 text-purple-700' },
+  'google-scholar':   { label: 'Scholar', color: 'bg-sky-100 text-sky-700' },
 };
 
 function formatNum(n: number): string {
