@@ -55,9 +55,16 @@ export default function ScientistCard({ scientist }: Props) {
           <div className="flex items-center gap-4 mt-2 flex-wrap">
             <Metric
               icon="★"
+              iconCls="text-blue-500"
+              value={formatCitations(scientist.fieldCitedByCount)}
+              label="field citations"
+              highlight
+            />
+            <Metric
+              icon="★"
               iconCls="text-yellow-500"
               value={formatCitations(scientist.citedByCount)}
-              label="citations"
+              label="career total"
             />
             <Metric value={`h${scientist.hIndex}`} label="h-index" />
             <Metric value={formatCitations(scientist.worksCount)} label="works" />
@@ -78,14 +85,14 @@ export default function ScientistCard({ scientist }: Props) {
   );
 }
 
-function Metric({ icon, iconCls, value, label }: {
-  icon?: string; iconCls?: string; value: string; label: string;
+function Metric({ icon, iconCls, value, label, highlight }: {
+  icon?: string; iconCls?: string; value: string; label: string; highlight?: boolean;
 }) {
   return (
-    <span className="flex items-center gap-0.5 text-xs text-slate-600">
+    <span className={`flex items-center gap-0.5 text-xs ${highlight ? 'text-blue-700 font-semibold' : 'text-slate-600'}`}>
       {icon && <span className={iconCls}>{icon}</span>}
       <span className="font-semibold">{value}</span>
-      <span className="text-slate-400">{label}</span>
+      <span className={highlight ? 'text-blue-400' : 'text-slate-400'}>{label}</span>
     </span>
   );
 }

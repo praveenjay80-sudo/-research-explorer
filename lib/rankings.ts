@@ -108,13 +108,15 @@ export async function fetchRankedScientists(
   fieldId = '',
   subfieldName = '',
 ): Promise<{ scientists: RankedScientist[]; total: number }> {
-  // Step 1: Get top 200 most-cited works in this concept/subfield.
-  //   concepts.id filter on /works is well-supported and stable.
-  const worksFilter = `concepts.id:${shortId(subfieldId)}`;
+  const targetShortId = shortId(subfieldId);
+
+  // Step 1: Fetch the top 200 most-cited works tagged with this concept.
+  //   Include concepts so we can filter by relevance score.
+  const worksFilter = `concepts.id:${targetShortId}`;
   const worksParams = new URLSearchParams({
     sort: 'cited_by_count:desc',
     'per-page': '200',
-    select: 'id,cited_by_count,authorships',
+    select: 'id,cited_by_count,authorships,concepts',
     mailto: MAILTO,
   });
   const worksRes = await fetch(`${BASE}/works?filter=${worksFilter}&${worksParams.toString()}`, {
@@ -125,31 +127,48 @@ export async function fetchRankedScientists(
     throw new Error(`OpenAlex works error: ${worksRes.status} — ${body.slice(0, 200)}`);
   }
   const worksData = await worksRes.json();
-  type RawWork = { cited_by_count: number; authorships: Array<{ author: { id: string } }> };
-  const works = (worksData.results ?? []) as RawWork[];
 
-  // Step 2: Aggregate citations-in-field per author
-  const authorCitations = new Map<string, number>();
+  type RawWork = {
+    cited_by_count: number;
+    authorships: Array<{ author: { id: string } }>;
+    concepts: Array<{ id: string; score: number }> | null;
+  };
+  const allWorks = (worksData.results ?? []) as RawWork[];
+
+  // Step 2: Keep only works where this concept is genuinely central (score ≥ 0.3).
+  //   This prevents cross-field bleed — e.g. Hinton's ML papers that are only
+  //   tangentially tagged with "Mathematical Analysis" at score ~0.05 are excluded,
+  //   while legitimate papers with even modest relevance are included.
+  const works = allWorks.filter((w) => {
+    if (!w.concepts) return true; // keep if concept data missing
+    const c = w.concepts.find((c) => shortId(c.id) === targetShortId);
+    return c ? c.score >= 0.3 : false;
+  });
+
+  if (works.length === 0) return { scientists: [], total: 0 };
+
+  // Step 3: Aggregate field-specific citations per author from those filtered works.
+  const fieldCitations = new Map<string, number>();
   for (const w of works) {
     for (const a of w.authorships ?? []) {
       const aid = a.author?.id;
       if (!aid) continue;
-      authorCitations.set(aid, (authorCitations.get(aid) ?? 0) + w.cited_by_count);
+      fieldCitations.set(aid, (fieldCitations.get(aid) ?? 0) + w.cited_by_count);
     }
   }
 
-  const topIds = [...authorCitations.entries()]
+  // Sort by field citations — NOT career total — so only domain-relevant
+  // researchers rank highly (fixes Hinton appearing in Mathematical Analysis).
+  const ranked = [...fieldCitations.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 100)
-    .map(([id]) => shortId(id));
+    .slice(0, 100);
 
+  const topIds = ranked.map(([id]) => shortId(id));
   if (topIds.length === 0) return { scientists: [], total: 0 };
 
-  // Step 3: Fetch full author profiles for the top IDs, sorted by career citations.
-  //   ids.openalex:A1|A2|... is a supported OR filter on the authors endpoint.
+  // Step 4: Fetch full author profiles for career metrics (name, h-index, institution…).
   const authorFilter = `ids.openalex:${topIds.join('|')}`;
   const authorParams = new URLSearchParams({
-    sort: 'cited_by_count:desc',
     'per-page': '100',
     select: AUTHOR_SELECT,
     mailto: MAILTO,
@@ -160,31 +179,43 @@ export async function fetchRankedScientists(
   if (!authorRes.ok) throw new Error(`OpenAlex author lookup error: ${authorRes.status}`);
   const authorData = await authorRes.json();
 
-  const results = (authorData.results ?? []) as OARawAuthor[];
-  const offset = (page - 1) * PER_PAGE;
-  const pageSlice = results.slice(offset, offset + PER_PAGE);
+  // Build lookup map by short ID
+  const profileMap = new Map<string, OARawAuthor>();
+  for (const a of (authorData.results ?? []) as OARawAuthor[]) {
+    profileMap.set(shortId(a.id), a);
+  }
 
-  const scientists: RankedScientist[] = pageSlice.map((a, i) => {
+  // Step 5: Re-sort by field citations and paginate.
+  const offset = (page - 1) * PER_PAGE;
+  const pageSlice = ranked.slice(offset, offset + PER_PAGE);
+
+  const scientists: RankedScientist[] = [];
+  for (let i = 0; i < pageSlice.length; i++) {
+    const [fullId, fieldCites] = pageSlice[i];
+    const sid = shortId(fullId);
+    const a = profileMap.get(sid);
+    if (!a) continue;
     const inst = a.last_known_institutions?.[0];
     const pt = a.topics?.[0];
-    return {
+    scientists.push({
       rank: offset + i + 1,
-      openAlexId: shortId(a.id),
+      openAlexId: sid,
       name: a.display_name,
       institution: inst?.display_name ?? 'Unknown Institution',
       country: inst?.country_code ?? '',
       citedByCount: a.cited_by_count ?? 0,
+      fieldCitedByCount: fieldCites,
       worksCount: a.works_count ?? 0,
       hIndex: a.summary_stats?.h_index ?? 0,
       field: fieldName || (pt?.field?.display_name ?? ''),
       fieldId: fieldId || (pt?.field?.id ?? ''),
       subfield: subfieldName || (pt?.subfield?.display_name ?? ''),
       subfieldId,
-      dataSource: 'openalex' as const,
-    };
-  });
+      dataSource: 'openalex',
+    });
+  }
 
-  return { scientists, total: results.length };
+  return { scientists, total: ranked.length };
 }
 
 // ── Single author profile ────────────────────────────────────────────────────

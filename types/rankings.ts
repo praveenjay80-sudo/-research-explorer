@@ -17,7 +17,8 @@ export interface RankedScientist {
   name: string;
   institution: string;
   country: string;
-  citedByCount: number;
+  citedByCount: number;       // career total citations (for profile detail)
+  fieldCitedByCount: number;  // citations from papers in this specific subfield (ranking basis)
   worksCount: number;
   hIndex: number;
   field: string;

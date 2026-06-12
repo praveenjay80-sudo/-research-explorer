@@ -45,6 +45,7 @@ export async function GET(req: NextRequest) {
         institution: e.institution,
         country: e.country,
         citedByCount: e.citedByCount,
+        fieldCitedByCount: e.citedByCount, // Stanford uses career total as ranking basis
         worksCount: e.worksCount,
         hIndex: e.hIndex,
         field: e.field,
