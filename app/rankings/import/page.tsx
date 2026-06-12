@@ -351,7 +351,42 @@ function ScientistExplain({ scientist, year }: { scientist: ParsedRow; year: str
   );
 }
 
-const LS_KEY = 'research-explorer-datasets';
+// ── IndexedDB helpers (no size limit, survives refresh & redeploy) ────────
+const IDB_NAME = 'research-explorer';
+const IDB_STORE = 'datasets';
+
+function idbOpen(): Promise<IDBDatabase> {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => res(req.result as T);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbSet(key: string, value: unknown): Promise<void> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(value, key);
+    req.onsuccess = () => res();
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbDel(key: string): Promise<void> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(key);
+    req.onsuccess = () => res();
+    req.onerror = () => rej(req.error);
+  });
+}
 
 export default function ImportPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -360,22 +395,18 @@ export default function ImportPage() {
 
   // Restore persisted datasets on first load
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const { datasets: saved, activeYear: savedYear } = JSON.parse(raw) as { datasets: Dataset[]; activeYear: string };
-      if (saved?.length) {
-        setDatasets(saved);
-        setActiveYear(savedYear ?? saved[0].year);
-        setShowImport(false);
-      }
-    } catch { /* ignore corrupt storage */ }
+    idbGet<{ datasets: Dataset[]; activeYear: string }>('state').then((saved) => {
+      if (!saved?.datasets?.length) return;
+      setDatasets(saved.datasets);
+      setActiveYear(saved.activeYear ?? saved.datasets[0].year);
+      setShowImport(false);
+    }).catch(() => {});
   }, []);
 
   // Persist datasets whenever they change
   useEffect(() => {
-    if (datasets.length === 0) { localStorage.removeItem(LS_KEY); return; }
-    try { localStorage.setItem(LS_KEY, JSON.stringify({ datasets, activeYear })); } catch { /* quota */ }
+    if (datasets.length === 0) { idbDel('state').catch(() => {}); return; }
+    idbSet('state', { datasets, activeYear }).catch(() => {});
   }, [datasets, activeYear]);
   const [yearInput, setYearInput] = useState('');
   const [warnings, setWarnings] = useState<string[]>([]);
