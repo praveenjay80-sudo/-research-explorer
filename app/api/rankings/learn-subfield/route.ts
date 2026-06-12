@@ -97,37 +97,40 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean).join('\n');
   }).join('\n\n');
 
-  const prompt = `You are explaining "${subfield}" (part of ${field}) to a curious, intelligent person who has never read an academic paper.
+  const context = `${subfield} as it is practised within ${field}`;
 
-Context — world's most-cited researchers in this subfield:
+  const prompt = `You are explaining "${context}" to a curious, intelligent person who has never read an academic paper.
+
+IMPORTANT: The subject is specifically "${context}" — not ${subfield} in general, and not ${field} in general. The same subfield name means different things in different parent fields (e.g. "Statistics" in Mathematics is different from "Statistics" in Medicine or Social Sciences). Everything you write must be specific to how ${subfield} is understood and practised within ${field}.
+
+World's most-cited researchers in ${context}:
 ${scientistList}
 
-Most-cited papers from OpenAlex (use only if genuinely influential):
+Most-cited papers from OpenAlex for this specific area (use only if genuinely influential in ${context}):
 ${papersBlock || 'None retrieved.'}
 
 Write two things only:
 
 PART 1 — OVERVIEW
-1–2 paragraphs in plain English: what ${subfield} is, what questions it tries to answer, and why it matters to real people. Explain every technical term the moment you use it. Vivid and concrete.
+1–2 paragraphs explaining what ${context} is, what specific questions it tries to answer within ${field}, and why it matters to real people. Be precise — a reader should understand how this subfield differs from adjacent areas of ${field}. Explain every technical term the moment you use it. Vivid and concrete.
 
 PART 2 — READING LIST
-List ONLY the most influential books and papers a newcomer must read to understand this field — the works that every expert has read, that shaped how the field thinks, and that are still worth reading today. This means landmark papers, foundational textbooks, and important review articles. Do NOT list obscure or narrow papers just because they appeared in the OpenAlex data above.
+List ONLY the most influential books and papers a newcomer must read to understand ${context} specifically — the works that every expert in this exact area has read, that shaped how the ${field} community approaches ${subfield}, and that are still worth reading today. Landmark papers, foundational textbooks, and key review articles.
 
-Draw primarily on your knowledge of what is genuinely influential in ${subfield}. If any papers from the OpenAlex list above are truly landmark works, include them. Otherwise ignore them.
+Do NOT list works from ${subfield} in other fields unless they are directly foundational to the ${field} version. Draw on your knowledge of what is genuinely influential in ${context}. Use the OpenAlex papers above only if they are truly landmark works for this area.
 
-Order the list so each entry builds on what came before — start with the most accessible and end with the most advanced.
+Order so each entry builds on what came before — most accessible first, most advanced last.
 
 For each entry use exactly this format:
 [number]. "Title" — Author(s) (Year) [Book / Paper / Review]
-→ What it established: [one sentence]
+→ What it established: [one sentence, specific to ${context}]
 → Read after: [entry number(s), or "nothing — start here"]
 
 Rules:
-- Only include works that a leading expert in ${subfield} would immediately recognise as essential
-- Include books where they are more influential than papers (many fields have defining textbooks)
+- Only include works a leading expert in ${context} would immediately recognise as essential
+- Include books where they are more influential than papers
 - Plain English. Every technical term explained in parentheses on first use
-- Do not pad the list — 6 to 15 entries is right for most fields
-- Do not cut off before the list is complete`;
+- 6 to 15 entries is right for most fields — do not pad, do not cut off`;
 
   try {
     const client = new Anthropic({ apiKey });
