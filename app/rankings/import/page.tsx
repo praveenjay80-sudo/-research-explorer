@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { countryFlag, formatCitations } from '@/lib/rankings';
 
@@ -46,9 +46,9 @@ const COL: Record<string, string[]> = {
   country:      ['cntry', 'country', 'country_code', 'ctry'],
   field:        ['sm-field', 'sm_field', 'field', 'sm field', 'discipline', 'domain'],
   subfield:     ['sm-subfield-1', 'sm_subfield_1', 'subfield', 'sub-field', 'sm subfield 1', 'subfield1', 'sm-subfield'],
-  citations:    ['nc6024', 'nc6025', 'nc6023', 'nc6022', 'nc9623', 'nc9622',
+  citations:    ['nc6024', 'nc6025', 'nc6023', 'nc6022', 'nc9624', 'nc9625', 'nc9623', 'nc9622',
                  'nc2425', 'nc2526', 'nc2324', 'nc2223',
-                 'cited_by_count', 'citations', 'total citations', 'nc', 'nc24', 'nc23', 'nc22', 'nc21', 'c'],
+                 'cited_by_count', 'citations', 'total citations', 'nc24', 'nc23', 'nc22', 'nc21', 'nc', 'c'],
   hIndex:       ['h24', 'h25', 'h23', 'h22', 'h21', 'h20', 'h19', 'h_index', 'h-index', 'hindex'],
   works:        ['np6024', 'np6025', 'np6023', 'np9623', 'np6022',
                  'np2425', 'np2526', 'np2324', 'np2223',
@@ -114,7 +114,9 @@ function findCol(lower: string[], aliases: string[]): number {
     const i = lower.findIndex((h) => h === a);
     if (i !== -1) return i;
   }
+  // Partial match only for aliases ≥ 3 chars to avoid 'c' matching 'cns24', 'nc', etc.
   for (const a of aliases) {
+    if (a.length < 3) continue;
     const i = lower.findIndex((h) => h.includes(a));
     if (i !== -1) return i;
   }
@@ -349,10 +351,32 @@ function ScientistExplain({ scientist, year }: { scientist: ParsedRow; year: str
   );
 }
 
+const LS_KEY = 'research-explorer-datasets';
+
 export default function ImportPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [activeYear, setActiveYear] = useState('');
   const [showImport, setShowImport] = useState(true);
+
+  // Restore persisted datasets on first load
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const { datasets: saved, activeYear: savedYear } = JSON.parse(raw) as { datasets: Dataset[]; activeYear: string };
+      if (saved?.length) {
+        setDatasets(saved);
+        setActiveYear(savedYear ?? saved[0].year);
+        setShowImport(false);
+      }
+    } catch { /* ignore corrupt storage */ }
+  }, []);
+
+  // Persist datasets whenever they change
+  useEffect(() => {
+    if (datasets.length === 0) { localStorage.removeItem(LS_KEY); return; }
+    try { localStorage.setItem(LS_KEY, JSON.stringify({ datasets, activeYear })); } catch { /* quota */ }
+  }, [datasets, activeYear]);
   const [yearInput, setYearInput] = useState('');
   const [warnings, setWarnings] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
