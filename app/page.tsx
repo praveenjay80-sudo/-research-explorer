@@ -7,6 +7,18 @@ import PaperList from '@/components/PaperList';
 import ConceptMap from '@/components/ConceptMap';
 import { Paper, ConceptGraph } from '@/types';
 
+const ALL_SOURCES = [
+  { id: 'semantic-scholar', label: 'Semantic Scholar', short: 'S2',         color: 'bg-orange-100 text-orange-700 border-orange-200',  activeColor: 'bg-orange-500 text-white border-orange-500',  needsKey: false },
+  { id: 'openalex',         label: 'OpenAlex',         short: 'OpenAlex',   color: 'bg-green-100 text-green-700 border-green-200',     activeColor: 'bg-green-600 text-white border-green-600',    needsKey: false },
+  { id: 'pubmed',           label: 'PubMed',           short: 'PubMed',     color: 'bg-blue-100 text-blue-700 border-blue-200',        activeColor: 'bg-blue-600 text-white border-blue-600',      needsKey: true },
+  { id: 'arxiv',            label: 'arXiv',            short: 'arXiv',      color: 'bg-red-100 text-red-700 border-red-200',           activeColor: 'bg-red-600 text-white border-red-600',        needsKey: true },
+  { id: 'europe-pmc',       label: 'Europe PMC',       short: 'Europe PMC', color: 'bg-violet-100 text-violet-700 border-violet-200',  activeColor: 'bg-violet-600 text-white border-violet-600',  needsKey: true },
+  { id: 'eric',             label: 'ERIC',             short: 'ERIC',       color: 'bg-teal-100 text-teal-700 border-teal-200',        activeColor: 'bg-teal-600 text-white border-teal-600',      needsKey: true },
+  { id: 'google-scholar',   label: 'Google Scholar',   short: 'Scholar',    color: 'bg-sky-100 text-sky-700 border-sky-200',           activeColor: 'bg-sky-600 text-white border-sky-600',        needsKey: true },
+];
+
+type SourceId = typeof ALL_SOURCES[number]['id'];
+
 const EXAMPLE_TOPICS = [
   'transformer neural networks',
   'CRISPR gene editing',
@@ -93,8 +105,12 @@ export default function HomePage() {
   const [page, setPage] = useState(1);
   const [activeQuery, setActiveQuery] = useState('');
   const [conceptId, setConceptId] = useState<string | null>(null);
+  const [selectedSources, setSelectedSources] = useState<Set<SourceId>>(
+    () => new Set(ALL_SOURCES.map((s) => s.id))
+  );
 
-  const search = useCallback(async (q: string, pageNum = 1) => {
+  const search = useCallback(async (q: string, pageNum = 1, sources?: Set<SourceId>) => {
+    const activeSources = sources ?? selectedSources;
     const isNewSearch = pageNum === 1;
     if (isNewSearch) {
       setLoading(true);
@@ -107,7 +123,8 @@ export default function HomePage() {
     }
     try {
       const cid = isNewSearch ? '' : (conceptId ? `&conceptId=${encodeURIComponent(conceptId)}` : '');
-      const res = await fetch(`/api/search?query=${encodeURIComponent(q)}&page=${pageNum}${cid}`);
+      const srcParam = `&sources=${[...activeSources].join(',')}`;
+      const res = await fetch(`/api/search?query=${encodeURIComponent(q)}&page=${pageNum}${cid}${srcParam}`);
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
       setPapers((prev) => (isNewSearch ? data.papers : [...prev, ...data.papers]));
@@ -122,10 +139,19 @@ export default function HomePage() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [conceptId]);
+  }, [conceptId, selectedSources]);
 
   function handleSearch(q: string) { setQuery(q); search(q, 1); }
   function handleLoadMore() { search(activeQuery, page + 1); }
+
+  function toggleSource(id: SourceId) {
+    setSelectedSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) { if (next.size > 1) next.delete(id); }
+      else next.add(id);
+      return next;
+    });
+  }
   const hasMore = papers.length < totalCount && totalCount > 0;
 
   return (
@@ -168,6 +194,25 @@ export default function HomePage() {
             <p className="text-lg text-slate-500 mb-8 max-w-2xl mx-auto">
               Search papers, explore concept maps, and browse Stanford&apos;s official rankings of the most-cited scientists on Earth — with AI-generated plain-English profiles.
             </p>
+            {/* Database selector */}
+            <div className="flex flex-wrap justify-center gap-1.5 mb-5">
+              {ALL_SOURCES.map((src) => {
+                const active = selectedSources.has(src.id);
+                return (
+                  <button
+                    key={src.id}
+                    onClick={() => toggleSource(src.id)}
+                    title={src.needsKey ? `${src.label} — requires PDFVECTOR_API_KEY` : src.label}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-semibold transition-all ${active ? src.activeColor : src.color} ${src.needsKey ? 'opacity-80' : ''}`}
+                  >
+                    {active && <span className="text-[9px]">✓</span>}
+                    {src.short}
+                    {src.needsKey && !active && <span className="text-[9px] opacity-60">🔑</span>}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="flex flex-wrap justify-center gap-2 mb-4">
               {EXAMPLE_TOPICS.map((t) => (
                 <button
@@ -279,6 +324,36 @@ export default function HomePage() {
 
         {error && (
           <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">{error}</div>
+        )}
+
+        {/* ── Source selector bar (shown after first search) ── */}
+        {hasSearched && (
+          <div className="pt-4 pb-2 flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Sources:</span>
+            {ALL_SOURCES.map((src) => {
+              const active = selectedSources.has(src.id);
+              return (
+                <button
+                  key={src.id}
+                  onClick={() => { toggleSource(src.id); }}
+                  title={src.needsKey ? `${src.label} — requires PDFVECTOR_API_KEY` : src.label}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold transition-all ${active ? src.activeColor : src.color}`}
+                >
+                  {active && <span className="text-[9px]">✓</span>}
+                  {src.short}
+                  {src.needsKey && !active && <span className="text-[9px] opacity-60">🔑</span>}
+                </button>
+              );
+            })}
+            {activeQuery && (
+              <button
+                onClick={() => search(activeQuery, 1)}
+                className="ml-1 px-2.5 py-0.5 rounded-full bg-blue-600 text-white text-[11px] font-semibold hover:bg-blue-700 transition-colors"
+              >
+                Re-search
+              </button>
+            )}
+          </div>
         )}
 
         {/* ── Search results ── */}

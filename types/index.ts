@@ -6,7 +6,7 @@ export interface Paper {
   citationCount: number;
   abstract?: string;
   url?: string;
-  source: 'semantic-scholar' | 'openalex' | 'merged';
+  source: 'semantic-scholar' | 'openalex' | 'merged' | 'pdfvector';
   fieldsOfStudy?: string[];
   doi?: string;
   concepts?: string[];
