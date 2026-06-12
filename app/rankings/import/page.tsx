@@ -282,65 +282,93 @@ export default function ImportPage() {
     try {
       const { read, utils } = await import('xlsx');
       const buffer = await file.arrayBuffer();
-      const wb = read(buffer, { type: 'array', cellDates: false, sheetStubs: true });
+      // dense: true reads the sheet as a 2-D array of cell objects; raw: false uses display values
+      const wb = read(buffer, { type: 'array', cellDates: false, dense: true });
 
-      // Score columns: how many known Stanford column names does this header row have?
-      const KNOWN = ['authfull', 'inst_name', 'cntry', 'sm-field', 'sm-subfield-1',
-                     'c', 'h23', 'h22', 'h21', 'np6023', 'np', 'cns23', 'domain', '#auth'];
-      function scoreHeaders(hdrs: string[]): number {
-        const low = hdrs.map((h) => h.toLowerCase().trim());
-        return KNOWN.filter((k) => low.some((h) => h === k || h.startsWith(k))).length;
+      function rowToStrings(row: unknown[]): string[] {
+        return (row ?? []).map((cell) => {
+          if (cell == null) return '';
+          if (typeof cell === 'object' && 'v' in (cell as object)) {
+            return String((cell as { v: unknown }).v ?? '').trim();
+          }
+          return String(cell).trim();
+        });
       }
 
-      // Try every sheet, find the one whose first non-empty row looks most like a Stanford header
+      // Score a header row by how many of our known column names it contains
+      const KNOWN = [
+        'authfull', 'inst_name', 'cntry', 'sm-field', 'sm-subfield-1',
+        'c', 'h23', 'h22', 'h21', 'h20', 'np6023', 'np', 'cns23',
+        'domain', '#auth', 'firstyr', 'lastyr', 'self_share', 'rank',
+        'author', 'name', 'institution', 'country', 'field', 'subfield',
+        'citations', 'hindex', 'h-index', 'works', 'papers',
+      ];
+      function scoreHeaders(cells: string[]): number {
+        const low = cells.map((h) => h.toLowerCase());
+        return KNOWN.filter((k) => low.some((h) => h === k || h.includes(k))).length;
+      }
+
+      // Search every sheet; for each sheet find the best header row (first 20 rows)
       let bestSheetName = wb.SheetNames[0];
       let bestHeaderRow = 0;
-      let bestScore = -1;
+      let bestScore = 0;
 
       for (const sheetName of wb.SheetNames) {
         const ws = wb.Sheets[sheetName];
-        const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
-        // Scan first 10 rows for a header candidate
-        for (let ri = 0; ri < Math.min(10, raw.length); ri++) {
-          const row = (raw[ri] as unknown[]).map((c) => String(c ?? ''));
-          if (row.filter((c) => c.trim()).length < 3) continue; // skip sparse rows
-          const sc = scoreHeaders(row);
-          if (sc > bestScore) { bestScore = sc; bestSheetName = sheetName; bestHeaderRow = ri; }
+        if (!ws['!data']) continue;
+        const sheetData = ws['!data'] as unknown[][];
+        for (let ri = 0; ri < Math.min(20, sheetData.length); ri++) {
+          const cells = rowToStrings(sheetData[ri] ?? []);
+          const nonEmpty = cells.filter(Boolean).length;
+          if (nonEmpty < 1) continue;
+          const sc = scoreHeaders(cells);
+          if (sc > bestScore) {
+            bestScore = sc; bestSheetName = sheetName; bestHeaderRow = ri;
+          }
         }
       }
 
+      // Fall back: re-read chosen sheet with sheet_to_json for easy row access
       const ws = wb.Sheets[bestSheetName];
-      const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
-      const allRows = raw as unknown[][];
+      const rawSheet = utils.sheet_to_json<unknown[]>(ws, { header: 1 });
+      const allRows = rawSheet as unknown[][];
+
+      // Find the first row with any content if bestScore is still 0
+      if (bestScore === 0) {
+        for (let ri = 0; ri < Math.min(20, allRows.length); ri++) {
+          const cells = (allRows[ri] ?? []).map((c) => String(c ?? '').trim());
+          if (cells.filter(Boolean).length >= 2) { bestHeaderRow = ri; break; }
+        }
+      }
 
       if (allRows.length <= bestHeaderRow + 1) {
-        const sheetList = wb.SheetNames.join(', ');
         setWarnings([
-          `Could not find data rows. Sheets in this file: ${sheetList}.`,
-          `Best sheet tried: "${bestSheetName}" (header at row ${bestHeaderRow + 1}, score ${bestScore}).`,
-          `Make sure the file is the main Stanford data file (Table_1 or Table_2), not a summary or readme sheet.`,
+          `No data rows found in sheet "${bestSheetName}" (${allRows.length} total rows).`,
+          `Sheets in this file: ${wb.SheetNames.join(', ')}.`,
+          `First row content: ${(allRows[0] ?? []).map((c) => String(c ?? '')).slice(0, 8).join(' | ')}`,
         ]);
         return;
       }
 
-      const headers = allRows[bestHeaderRow].map((h) => String(h ?? ''));
+      const headers = (allRows[bestHeaderRow] ?? []).map((h) => String(h ?? ''));
       const dataRows = allRows
         .slice(bestHeaderRow + 1)
         .map((r) => (r as unknown[]).map((c) => String(c ?? '')))
         .filter((r) => r.some((c) => c.trim()));
 
       const { rows, fieldStats, type, warnings: w } = parseSheetData(headers, dataRows);
-      const diagInfo = `Sheet: "${bestSheetName}" · ${headers.length} columns · ${dataRows.length} rows`;
-      setWarnings(w.length ? w : w.concat());
 
       if (rows.length === 0 && fieldStats.length === 0) {
         setWarnings([
-          `Parsed 0 records. ${diagInfo}.`,
-          `Detected headers: ${headers.slice(0, 16).join(', ')}${headers.length > 16 ? '…' : ''}`,
-          `Expected columns like "authfull", "c", "h23", "sm-field", "sm-subfield-1".`,
+          `Parsed 0 records from sheet "${bestSheetName}" (${dataRows.length} data rows, ${headers.length} columns).`,
+          `Detected headers: ${headers.filter(Boolean).slice(0, 20).join(' | ')}`,
+          `Expected columns like: authfull, c, h23, sm-field, sm-subfield-1, inst_name, cntry.`,
+          ...(w.length ? w : []),
         ]);
         return;
       }
+
+      setWarnings(w);
 
       const label = yr || file.name.replace(/\.(xlsx?|csv)$/i, '').trim() || `Import ${datasets.length + 1}`;
       const fieldSet = new Set([...rows.map((r) => r.field), ...fieldStats.map((r) => r.field)].filter(Boolean));
